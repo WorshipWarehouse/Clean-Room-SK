@@ -672,23 +672,42 @@ pass inherits the better names.
 
 ## 18. Entitlement path under real names — Observed
 
-With section 17 in place the licence chain reads without address bookkeeping. 91
-licence and session functions were re-decompiled from the renamed project, and their calls
-were resolved against the full name table: 2 of them call other
-licence-related functions, giving 4 edges.
+Re-decompiling from the renamed project makes the licence functions identifiable, and the
+result is a shallow graph rather than a chain. That is the finding, not a limitation of the
+rename.
 
-| caller | licence-related callees |
+| property | measured |
 | --- | --- |
-| `SundaySounds_SoundLicenceExpiredDemoBanner_witness14` | `Domain_LicenseExpiration_accessor`, `M_LicenceBrowserView_accessor`, `SundaySounds_SoundLicenceExpiredDemoBanner_accessor` |
-| `Domain_UserSessionSettingsModel_witness48` | `Domain_UserSessionSettingsModel_witness47` |
+| licence and session functions re-decompiled | 91 |
+| decompiled C | 2538 lines |
+| call edges to named app functions | 82 |
+| call edges between two licence functions | 4 |
+| functions with no named callee at all | 59 |
 
-The graph is shallow on purpose. Swift witness slots carry the behaviour for each type, so
-the licence path shows as type-to-type calls rather than one deep call chain: the session
-model decodes an optional `LicenseApi`, the licence model decodes a status and a date, and
-the domain and storage types mirror those values for the UI gate. That matches the decoder
-evidence in section 12 and the model inventory in section 13, which were recovered by
-different means.
+The largest licence bodies and what they call:
 
-Names attached here are metadata-derived, not symbols from the binary, so a call edge means
-the caller references that function address in its body. It does not by itself prove a
-protocol requirement name, which the descriptors do not carry.
+| function | lines | named callees |
+| --- | --- | --- |
+| `SundaySounds_TonicPadLicenceExpiredView_witness14` | 368 | `_memcpy`, `_swift_bridgeObjectRetain`, `_swift_once` |
+| `SundaySounds_SoundLicenceExpiredDemoBanner_witness14` | 238 | `Domain_LicenseExpiration_accessor`, `M_LicenceBrowserView_accessor`, `SundaySounds_SoundLicenceExpiredDemoBanner_accessor` |
+| `SundaySounds_TeamLicenceDowngradedPopoverView_witness34` | 225 | `get_center` |
+| `LicenseExpiredPopup_Key_witness30` | 43 | `_swift_checkMetadataState`, `_swift_initStructMetadata`, `typeMetadataAccessor` |
+| `LicenseExpiredPopup_ReceivingModifier_witness14` | 40 | `MainLayout_Popup_accessor`, `init` |
+| `SundaySounds_SoundLicenceExpiredTag_witness14` | 39 | `SundaySounds_PaywallOptionalTag_accessor`, `_swift_getKeyPath`, `_swift_storeEnumTagMultiPayload` |
+| `Domain_LicenseWarning_witness48` | 38 | `Domain_UserModel_accessor`, `_stringCompareWithSmolCheck` |
+| `Networking_AccessibleProductApi_witness46` | 35 | `_finalize`, `_swift_bridgeObjectRelease`, `hash` |
+| `Networking_AccessibleProductApi_witness42` | 35 | `_finalize`, `_swift_bridgeObjectRelease`, `hash` |
+| `Domain_UserLicense_witness30` | 33 | `_finalize`, `_swift_bridgeObjectRelease`, `hash` |
+| `Domain_UserLicense_witness26` | 33 | `_finalize`, `_swift_bridgeObjectRelease`, `hash` |
+| `Domain_UserLicenseStatus_witness44` | 33 | `_finalize`, `_swift_bridgeObjectRelease`, `hash` |
+
+Most of these bodies are single-purpose witness slots: field getters, enum hashing and
+metadata accessors. They rarely call one another, so entitlement is carried by protocol
+dispatch and by the shared model types rather than by a deep call chain. An earlier pass here
+counted only callees whose names also matched the licence pattern and reported four edges;
+widening that to every named callee gives 82 edges across 91 functions,
+while 59 of those functions call no named function at all.
+
+An edge means the caller references that function in its decompiled body. It does not prove a
+protocol requirement name, which the conformance descriptors do not carry, and it does not
+capture indirect dispatch, so the true flow is broader than the table shows.
