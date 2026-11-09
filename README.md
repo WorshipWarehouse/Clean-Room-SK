@@ -13,8 +13,8 @@ Nothing here is produced by executing the original app, and no original source w
 | static analysis | 89,486 functions decompiled, 3,186 types recovered, 20 documented sections |
 | feature inventory | capability checklist with evidence and gaps |
 | implementation plan | contracts, milestones, unknowns |
-| app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue |
-| not yet built | effects chain, patch model, persistence, MIDI controller mapping, `.app` bundle |
+| app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence |
+| not yet built | effects chain, MIDI controller mapping, sessions and set lists, `.app` bundle |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -32,8 +32,8 @@ dispatch references over 2,527 descriptors.
 | `docs/re/access-determination.md` | what blocks decompilation and what access it needs |
 | `Package.swift` | Swift package: `CSync`, `SundayKeysCore`, `SundayKeysApp` |
 | `Sources/CSync/` | atomic index loads and stores for the audio queue |
-| `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument |
-| `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, CoreMIDI input, AVAudioEngine host |
+| `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument, patch model and bank store |
+| `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker and layer editor, CoreMIDI input, AVAudioEngine host |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
 | `.github/workflows/build.yml` | clean build and test on a macOS runner |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
@@ -61,6 +61,19 @@ sample assets and the original libraries are proprietary. It is a wavetable synt
 - notes are routed through `LayerRouter`, so a key only reaches layers whose range contains it;
 - events cross to the render thread through a lock-free SPSC ring, so the render block never locks,
   allocates or drops a buffer.
+
+## Patches
+
+A patch is a name and a list of layers, each with its own key range, transpose, gain, timbre and
+enabled flag. The bank is JSON in Application Support, written atomically, and a missing file loads
+the starter patch instead of an empty window.
+
+- switching swaps the producer-side router and publishes the new timbres through the same command
+  ring, then releases what is sounding over the existing 220 ms fade, so the change is heard as a
+  tail under the new patch rather than as a gap and nothing is left hanging;
+- editing the patch that is playing never releases voices, so moving a gain slider cannot cut the
+  chord under the player's hands;
+- a program change selects the patch with that index, so a foot switch can walk a set list.
 
 ## Reproduce the analysis
 
@@ -115,8 +128,8 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
   mappings, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- There is no effects chain, no patch or snapshot model, no persistence and no controller mapping
-  yet, and the package builds an app target rather than a bundled `.app`.
+- There is no effects chain and no controller mapping yet, and the package builds an app target
+  rather than a bundled `.app`.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
   independently licensed or recorded material.
 
