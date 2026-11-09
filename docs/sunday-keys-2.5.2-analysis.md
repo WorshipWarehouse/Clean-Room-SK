@@ -528,11 +528,25 @@ the **endpoint** method: the client asks its own backend to sign the subscriptio
 
 ### Unknown
 
-Literal channel names and event names are **not** recovered. Direct `ADRP`+`ADD` scanning for
-references to these log format strings produced one hit, which turned out to be SwiftUI's
-environment-access warning (a false positive), confirming that the app's Swift string literals
-are reached through relative-pointer tables rather than plain address materialisation — the
-same obstacle recorded in §11. Also unresolved: the channel naming convention, the chunk
-size, whether payloads are encrypted (`private-encrypted-` exists but belongs to PusherSwift
-itself), and whether the server or a peer is authoritative for tempo changes.
+Literal channel names and event names are **not** recovered, and the negative result is now
+measured rather than assumed. A slot-based xref pass over the whole slice mapped **72,090**
+C-strings, found only **11** eight-byte data slots holding a reference to any of them (accepted
+in absolute form or chained-pointer form with the high bit set, masked to the low 36 bits),
+and resolved just **two** strings with code references — neither Pusher-related.
+
+An earlier `ADRP`+`ADD` scan of the same format strings appeared to yield one hit, but that
+hit came from an inverted slot/string map in my own scanner: the lookup compared slot
+addresses against string addresses, so it matched an unrelated constant. Decompiling the
+resulting function showed SwiftUI's environment-access warning, which is what exposed the
+bug. It was an artefact of my tooling, not a property of the binary, and it is recorded here
+so the dead end is not repeated.
+
+What the measurement actually implies: application strings in this slice are not materialised
+as absolute pointers in a form this scan decodes. The low slot count is itself suspicious —
+most rebased pointers are likely stored as image-relative offsets rather than absolute values
+— so a correct resolver needs to decode the chained-fixup rebase format and the
+`__swift5_*` relative tables before this question can be answered statically. Also
+unresolved: the channel naming convention, the chunk size, whether application payloads are
+encrypted (`private-encrypted-` belongs to PusherSwift itself, not to this app), and whether
+the server or a peer is authoritative for tempo changes.
 
