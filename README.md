@@ -53,11 +53,12 @@ python3 tools/swift_metadata.py /tmp/sundaykeys-arm64 --json /tmp/meta.json
 python3 tools/literal_refs.py /tmp/sundaykeys-arm64
 python3 tools/swift_names.py /tmp/meta.json > /tmp/swift-names.tsv
 
-# 3. whole-program decompilation, then re-run with names applied
+# 3. whole-program decompilation, then apply the names in the Ghidra project
 tools/decompile_all.sh /tmp/sk-full 2500 0
 
-# 4. caller to callee edges over a corpus decompiled with names
-tools/named_corpus.sh /tmp/sk-named
+# 4. re-run decompilation so every body carries the applied names, then build
+#    the caller to callee graph over that corpus
+tools/decompile_all.sh /tmp/sk-named 2500 0
 python3 tools/callgraph.py --corpus /tmp/sk-named \
   --names /tmp/sk-full/functions-named.tsv --out /tmp/callgraph.tsv
 ```
@@ -71,7 +72,7 @@ in 38 chunks. The reference slice is SHA-256
 - **Identity and surface**: bundle id, version, Mac Catalyst build, and a single network base
   `https://production.sundaysounds.com`.
 - **Licence model**: `UserSessionApi {maxAvailableBackups, maxAvailableAudioOutputs, userRole,
-  license, accessibleProducts}` carrying an optional `LicenseApi {status, gracePeriodEndsAt}`,
+  license, accessibleProducts}` carrying an optional `LicenseApi {status, gracePeriodsEndsAt}`,
   with the wire vocabulary `active` / `grace_period` / `expired`.
 - **API layer**: 81 `Networking` Codable models, `{data}` / `{error}` envelope, Pusher auth
   handshake, bulk product pull, and S3-style backup presign.
