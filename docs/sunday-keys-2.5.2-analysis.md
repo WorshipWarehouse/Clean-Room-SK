@@ -611,3 +611,35 @@ is the place to fix it.
 Decompilation needs a saved Ghidra project: a fresh import of this binary takes roughly ten
 minutes and does not fit in a single command window, so import once and reuse with
 `-noanalysis`, which brings repeat runs down to seconds.
+
+## 16. Whole-program decompilation — Observed (Ghidra 12.1.4)
+
+Every function in the arm64 slice is now decompiled, not only a curated sample.
+
+| property | value |
+| --- | --- |
+| functions decompiled | 89486 |
+| chunks | 38 (about 2355 functions each) |
+| decompiled C | 3316097 lines, 86.8 MB |
+| recognised symbols | 9300, 10.4 percent |
+| ghidra generated names | 80186 |
+
+Method: `tools/ghidra/ListFunctions.java` enumerates all entry points;
+`tools/decompile_all.sh` splits them into chunks, runs `analyzeHeadless` against the saved
+project with `-noanalysis`, and skips chunks whose output already exists, so an interrupted
+job resumes. Throughput measured here is about 140 functions per second, which puts the whole
+binary at roughly eleven minutes on this machine.
+
+The symbol split is the triage signal that matters. Only 10.4 percent of functions
+carry a recognised name, and those are imported C and Objective-C entry points plus library
+symbols. The remaining 80186 are `FUN_` blobs, and that is where the application Swift
+bodies live, because Ghidra does not recover Swift method names from their mangling.
+
+Reading behaviour therefore starts from the metadata in sections 12 to 15, which supplies
+type and property names, and follows those types to the `FUN_` bodies that reference their
+metadata accessors. That is exactly the route that recovered the licence decoder.
+
+Limits: the output is decompiled C, not runnable source, and it does not name Swift protocol
+witness dispatch. The conformance table matches 4,864 of 5,068 descriptors to local types;
+the 204 remainder reference type descriptors outside `__swift5_types`, which is an inherent
+boundary rather than a parser defect.
