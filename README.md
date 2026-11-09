@@ -30,6 +30,7 @@ The full findings live in [`docs/sunday-keys-2.5.2-analysis.md`](docs/sunday-key
 | `tools/literal_refs.py` | literal slot and code-referenced string scan |
 | `tools/swift_names.py` | name derivation from metadata and witness tables |
 | `tools/inventory.py` | function enumeration and coverage statistics |
+| `tools/callgraph.py` | caller to callee edges from a named corpus |
 | `tools/pipeline.sh` | end-to-end driver |
 | `tools/decompile.sh` | decompile selected addresses |
 | `tools/decompile_all.sh` | chunked whole-program decompilation |
@@ -54,6 +55,11 @@ python3 tools/swift_names.py /tmp/meta.json > /tmp/swift-names.tsv
 
 # 3. whole-program decompilation, then re-run with names applied
 tools/decompile_all.sh /tmp/sk-full 2500 0
+
+# 4. caller to callee edges over a corpus decompiled with names
+tools/named_corpus.sh /tmp/sk-named
+python3 tools/callgraph.py --corpus /tmp/sk-named \
+  --names /tmp/sk-full/functions-named.tsv --out /tmp/callgraph.tsv
 ```
 
 Decompilation runs at roughly 140 functions per second; the full program takes about 11 minutes
