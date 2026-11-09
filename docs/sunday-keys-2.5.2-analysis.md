@@ -669,3 +669,26 @@ Coverage limit: names attach only where local metadata points, which is 18103 of
 that no descriptor references stay anonymous. Renaming also does not retroactively change
 decompiled chunk files, which keep the labels they were produced under, so a later decompile
 pass inherits the better names.
+
+## 18. Entitlement path under real names — Observed
+
+With section 17 in place the licence chain reads without address bookkeeping. 91
+licence and session functions were re-decompiled from the renamed project, and their calls
+were resolved against the full name table: 2 of them call other
+licence-related functions, giving 4 edges.
+
+| caller | licence-related callees |
+| --- | --- |
+| `SundaySounds_SoundLicenceExpiredDemoBanner_witness14` | `Domain_LicenseExpiration_accessor`, `M_LicenceBrowserView_accessor`, `SundaySounds_SoundLicenceExpiredDemoBanner_accessor` |
+| `Domain_UserSessionSettingsModel_witness48` | `Domain_UserSessionSettingsModel_witness47` |
+
+The graph is shallow on purpose. Swift witness slots carry the behaviour for each type, so
+the licence path shows as type-to-type calls rather than one deep call chain: the session
+model decodes an optional `LicenseApi`, the licence model decodes a status and a date, and
+the domain and storage types mirror those values for the UI gate. That matches the decoder
+evidence in section 12 and the model inventory in section 13, which were recovered by
+different means.
+
+Names attached here are metadata-derived, not symbols from the binary, so a call edge means
+the caller references that function address in its body. It does not by itself prove a
+protocol requirement name, which the descriptors do not carry.
