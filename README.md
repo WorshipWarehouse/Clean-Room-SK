@@ -19,15 +19,16 @@ executed as part of this analysis, and no original source was consulted.
 | documented sections | 20 in `docs/sunday-keys-2.5.2-analysis.md` |
 
 The full findings live in [`docs/sunday-keys-2.5.2-analysis.md`](docs/sunday-keys-2.5.2-analysis.md),
-the plan for rebuilding from them is in
-[`docs/clean-room-implementation.md`](docs/clean-room-implementation.md), and the place to resume
-work from is [`docs/progress.md`](docs/progress.md).
+the capability checklist is [`docs/feature-inventory.md`](docs/feature-inventory.md), the plan for
+rebuilding is [`docs/clean-room-implementation.md`](docs/clean-room-implementation.md), and the
+place to resume work from is [`docs/progress.md`](docs/progress.md).
 
 ## Layout
 
 | path | purpose |
 | --- | --- |
 | `docs/sunday-keys-2.5.2-analysis.md` | the deliverable: 20 sections of findings |
+| `docs/feature-inventory.md` | capability checklist with evidence and gaps |
 | `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
 | `docs/progress.md` | phase status, next actions, decisions |
 | `tools/bootstrap.sh` | install or verify the local toolchain |
