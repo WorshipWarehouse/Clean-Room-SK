@@ -18,13 +18,16 @@ executed as part of this analysis, and no original source was consulted.
 | protocol dispatch sites attributed | 8,622 references over 2,527 descriptors |
 | documented sections | 20 in `docs/sunday-keys-2.5.2-analysis.md` |
 
-The full findings live in [`docs/sunday-keys-2.5.2-analysis.md`](docs/sunday-keys-2.5.2-analysis.md).
+The full findings live in [`docs/sunday-keys-2.5.2-analysis.md`](docs/sunday-keys-2.5.2-analysis.md),
+and the plan for rebuilding from them is in
+[`docs/clean-room-implementation.md`](docs/clean-room-implementation.md).
 
 ## Layout
 
 | path | purpose |
 | --- | --- |
 | `docs/sunday-keys-2.5.2-analysis.md` | the deliverable: 20 sections of findings |
+| `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
 | `tools/macho.py` | Mach-O parsing, chained fixups, relative pointers, string map |
 | `tools/swift_metadata.py` | Swift type, field and conformance recovery |
 | `tools/literal_refs.py` | literal slot and code-referenced string scan |
