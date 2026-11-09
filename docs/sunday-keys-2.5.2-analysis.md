@@ -721,8 +721,9 @@ confirmed earlier (the witness table sits eight bytes after the descriptor).
 
 | property | measured |
 | --- | --- |
-| types with well formed metadata names | 4505 of 3186 |
+| types with well formed metadata names | 3099 of 3186 |
 | malformed type records excluded from attribution | 87 |
+| conformances attributable to a well formed type | 4505 of 5068 |
 | distinct descriptors referenced in decompiled C | 2527 |
 | total references | 8856 |
 | references resolving to a well formed type | 7706 |
