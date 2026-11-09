@@ -528,25 +528,36 @@ the **endpoint** method: the client asks its own backend to sign the subscriptio
 
 ### Unknown
 
-Literal channel names and event names are **not** recovered, and the negative result is now
-measured rather than assumed. A slot-based xref pass over the whole slice mapped **72,090**
-C-strings, found only **11** eight-byte data slots holding a reference to any of them (accepted
-in absolute form or chained-pointer form with the high bit set, masked to the low 36 bits),
-and resolved just **two** strings with code references — neither Pusher-related.
+Literal channel names and event names are **not** recovered, but the search itself now works
+and the negative result is measured. Decoding the chained-fixup rebase format (rebase targets
+are stored as offsets from the image base, not as absolute addresses) changed the slot count
+from 11 to **32,510** and the number of code-referenced strings from 2 to **1,202**.
 
-An earlier `ADRP`+`ADD` scan of the same format strings appeared to yield one hit, but that
-hit came from an inverted slot/string map in my own scanner: the lookup compared slot
-addresses against string addresses, so it matched an unrelated constant. Decompiling the
-resulting function showed SwiftUI's environment-access warning, which is what exposed the
-bug. It was an artefact of my tooling, not a property of the binary, and it is recorded here
-so the dead end is not repeated.
+An earlier `ADRP`+`ADD` scan of the same format strings appeared to yield one hit. That hit
+came from an inverted slot/string map inside my own scanner, which compared slot addresses
+against string addresses; decompiling the result showed SwiftUI environment-warning code,
+which is what exposed the bug. It was an artefact of my tooling rather than a property of the
+binary, and it is recorded here so the dead end is not repeated.
 
-What the measurement actually implies: application strings in this slice are not materialised
-as absolute pointers in a form this scan decodes. The low slot count is itself suspicious —
-most rebased pointers are likely stored as image-relative offsets rather than absolute values
-— so a correct resolver needs to decode the chained-fixup rebase format and the
-`__swift5_*` relative tables before this question can be answered statically. Also
-unresolved: the channel naming convention, the chunk size, whether application payloads are
-encrypted (`private-encrypted-` belongs to PusherSwift itself, not to this app), and whether
-the server or a peer is authoritative for tempo changes.
+None of the recovered application identifiers is a Pusher channel or event name. The only
+app-state key that resolved is `loopConnectDeviceId`, and decompiling its referent gave a
+metadata accessor (`FUN_10066b250`) rather than channel construction. The strings referenced
+from code are dominated by dependencies (Firebase, Google Analytics, Lottie, Realm,
+PusherSwift).
+
+A sweep for Swift small-string immediates across the decompiled corpus returned 14 distinct
+values, and they are all enum vocabulary: `expired`, `active`, `slow`, `brake`, `fast`,
+`dynamic`, `ribbon`, `tube`, `classic`, `warm`, `front`, `back`, `instant`, `en_us`. That is
+a useful side result: it shows most enums in this app serialise as their case names
+(`SpeedModeApi`, `MicModelApi`, `CabinetModelApi`, `CabinetSideApi`), which makes
+`LicenseStatusApi.grace_period` the exception rather than the rule.
+
+The reason no channel literals exist is structural. `PusherDeviceConnectConfig.channel` and
+`PusherAuthRequestApi.channelName` both arrive from `/api/v1/pusher/config` and from the auth
+handshake, so the client treats channel names as runtime data. There is no constant to find,
+and the same is likely true of server-published event names.
+
+Also unresolved: the chunk size, whether application payloads are encrypted
+(`private-encrypted-` belongs to the vendored PusherSwift), and whether the server or a peer
+is authoritative for tempo changes.
 
