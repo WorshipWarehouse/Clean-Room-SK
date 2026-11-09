@@ -1,3 +1,4 @@
+import Foundation
 import SwiftUI
 import SundayKeysCore
 
@@ -34,24 +35,7 @@ struct ContentView: View {
                     .font(.system(.body, design: .monospaced))
             }
 
-            GroupBox("Layers") {
-                VStack(alignment: .leading, spacing: 4) {
-                    ForEach(model.layers) { layer in
-                        HStack(spacing: 8) {
-                            Text(layer.name)
-                                .frame(width: 64, alignment: .leading)
-                            Text("\(noteName(layer.range.bounds.low)) to \(noteName(layer.range.bounds.high))")
-                                .frame(width: 110, alignment: .leading)
-                            Text(layer.timbre == .keys ? "additive keys" : "FM bell")
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                        }
-                        .font(.system(.callout, design: .monospaced))
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
-            }
+            patchSection
 
             KeyboardView(model: model)
                 .frame(height: 150)
@@ -70,7 +54,161 @@ struct ContentView: View {
             Spacer()
         }
         .padding(24)
-        .frame(minWidth: 900, minHeight: 560)
+        .frame(minWidth: 900, minHeight: 640)
+    }
+
+    private var patchSection: some View {
+        GroupBox("Patch") {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 8) {
+                    Button("Prev") { model.stepPatch(by: -1) }
+
+                    Picker(
+                        "Patch",
+                        selection: Binding(
+                            get: { model.patch.id },
+                            set: { model.selectPatch($0) }
+                        )
+                    ) {
+                        ForEach(model.bank.patches) { patch in
+                            Text(patch.name).tag(patch.id)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 190)
+
+                    Button("Next") { model.stepPatch(by: 1) }
+
+                    TextField(
+                        "Patch name",
+                        text: Binding(
+                            get: { model.patch.name },
+                            set: { model.renamePatch($0) }
+                        )
+                    )
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 190)
+
+                    Button("New") { model.addPatch() }
+                    Button("Save") { model.saveBank() }
+                    Button("Delete") { model.deletePatch(model.patch.id) }
+                        .disabled(model.bank.patches.count < 2)
+
+                    Spacer()
+                }
+
+                Text(model.bankStatus)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+
+                Divider()
+
+                ForEach(model.layers) { layer in
+                    LayerRow(layer: layer, model: model)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+/// One editable layer. Every control writes straight back into the patch bank and
+/// down to the engine, so what the window shows is what is sounding.
+struct LayerRow: View {
+    let layer: KeyLayer
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Toggle(
+                    "",
+                    isOn: Binding(
+                        get: { layer.enabled },
+                        set: { model.setLayerEnabled(layer.id, enabled: $0) }
+                    )
+                )
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+
+                Text(layer.name)
+                    .frame(width: 56, alignment: .leading)
+                    .font(.system(.callout, design: .monospaced))
+
+                Stepper(value: lowerBinding, in: 0...127) {
+                    Text("low \(noteName(layer.range.bounds.low))")
+                        .font(.system(.caption, design: .monospaced))
+                }
+
+                Stepper(value: upperBinding, in: 0...127) {
+                    Text("high \(noteName(layer.range.bounds.high))")
+                        .font(.system(.caption, design: .monospaced))
+                }
+
+                Stepper(value: transposeBinding, in: -24...24) {
+                    Text("transpose \(layer.transpose >= 0 ? "+" : "")\(layer.transpose)")
+                        .font(.system(.caption, design: .monospaced))
+                }
+
+                Spacer()
+            }
+
+            HStack(spacing: 10) {
+                Picker(
+                    "Timbre",
+                    selection: Binding(
+                        get: { layer.timbre },
+                        set: { model.setLayerTimbre(layer.id, timbre: $0) }
+                    )
+                ) {
+                    Text("Additive keys").tag(KeyLayer.Timbre.keys)
+                    Text("FM bell").tag(KeyLayer.Timbre.bell)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 210)
+
+                Slider(
+                    value: Binding(
+                        get: { Double(layer.gain) },
+                        set: { model.setLayerGain(layer.id, gain: Float($0)) }
+                    ),
+                    in: 0...1.5
+                )
+                .frame(width: 150)
+
+                Text(String(format: "gain %.2f", layer.gain))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 74, alignment: .leading)
+
+                Spacer()
+            }
+            .disabled(!layer.enabled)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private var lowerBinding: Binding<Int> {
+        Binding(
+            get: { Int(layer.range.bounds.low) },
+            set: { model.setLayerLower(layer.id, note: UInt8(clamping: $0)) }
+        )
+    }
+
+    private var upperBinding: Binding<Int> {
+        Binding(
+            get: { Int(layer.range.bounds.high) },
+            set: { model.setLayerUpper(layer.id, note: UInt8(clamping: $0)) }
+        )
+    }
+
+    private var transposeBinding: Binding<Int> {
+        Binding(
+            get: { Int(layer.transpose) },
+            set: { model.setLayerTranspose(layer.id, semitones: Int8(clamping: $0)) }
+        )
     }
 }
 

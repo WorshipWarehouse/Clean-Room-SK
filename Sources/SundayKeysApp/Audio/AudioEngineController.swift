@@ -116,12 +116,15 @@ final class AudioEngineController {
     }
 
     /// Producer side, so it is safe from the main thread while audio renders: the
-    /// engine swaps its router and pushes the new timbres plus one all-notes-off
-    /// through the same ring notes use. Nothing on the graph is rebuilt, so a
-    /// switch never interrupts the render callbacks.
-    func setPatch(_ patch: Patch) {
+    /// engine swaps its router and pushes the new timbres through the same ring
+    /// notes use. Nothing on the graph is rebuilt, so a switch never interrupts the
+    /// render callbacks.
+    ///
+    /// `releasingVoices` is true for a real patch change and false when the player
+    /// is editing the patch that is already sounding.
+    func setPatch(_ patch: Patch, releasingVoices: Bool = true) {
         currentPatch = patch
-        keysound?.setPatch(patch)
+        keysound?.setPatch(patch, releasingVoices: releasingVoices)
     }
 
     func noteOn(note: UInt8, velocity: UInt8) {

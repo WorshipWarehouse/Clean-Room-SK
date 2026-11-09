@@ -52,12 +52,15 @@ public final class RealtimeKeysoundEngine {
     /// Routing changes immediately on the producer side, so the next keystroke uses
     /// the new ranges, transposes, gains and enabled states. The new timbres are
     /// published to the render thread through the same lock-free ring as notes, so
-    /// no lock or allocation is introduced on the audio path. Finally every
-    /// sounding voice is released: that is what keeps a key held across the switch
-    /// from hanging on a layer that no longer exists, and because release is a
-    /// 220 ms fade rather than a cut, the switch is heard as a tail under the new
-    /// patch instead of a gap.
-    public func setPatch(_ newPatch: Patch) {
+    /// no lock or allocation is introduced on the audio path.
+    ///
+    /// `releasingVoices` is what keeps a key held across a switch from hanging on a
+    /// layer that no longer exists, and because release is a 220 ms fade rather
+    /// than a cut, the change is heard as a tail under the new patch. A live edit
+    /// of the patch already being played passes `false`: ranges and timbres still
+    /// update, but the chord under the player's hands keeps sounding, because
+    /// releasing it on every slider step would be heard as a cut.
+    public func setPatch(_ newPatch: Patch, releasingVoices: Bool = true) {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
 
@@ -72,7 +75,9 @@ public final class RealtimeKeysoundEngine {
             index += 1
         }
 
-        enqueue(RenderCommand(kind: .allNotesOff))
+        if releasingVoices {
+            enqueue(RenderCommand(kind: .allNotesOff))
+        }
     }
 
     public func noteOn(note: UInt8, velocity: UInt8) {
