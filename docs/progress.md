@@ -10,7 +10,7 @@ actions in order. Findings themselves stay in
 | --- | --- | --- |
 | Investigate, static | done for what static methods allow | analysis sections 1 to 20 |
 | Investigate, runtime | not started | needs one captured session |
-| Design | functional specification and contracts written | `clean-room-implementation.md` |
+| Design | specification, contracts and feature inventory written | `clean-room-implementation.md`, `feature-inventory.md` |
 | Build | not started | needs a reachable machine with Xcode |
 | Test | not started | follows the build |
 
@@ -33,7 +33,10 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
    bodies, the chunk header pattern is wrong and needs fixing before the numbers mean anything.
 4. Add analysis section 21: module direction, replacing the co-occurrence limit stated at the
    end of section 20.
-5. Begin M1, the licence and session module in a Swift package, then build it.
+5. Work the decompilation targets listed at the end of `feature-inventory.md`, starting with
+   `Audio.KeyboardVelocityScaling`, `Audio.LayerRangeLimit` with `Domain.RangeApi`, and the MIDI
+   learn tables.
+6. Begin M1, the licence and session module in a Swift package, then build it.
 
 ## Coverage that remains
 
@@ -42,6 +45,8 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
 | call direction between modules | corpus is pre-rename | next actions 2 and 3 |
 | 234 unattributable dispatch references | descriptors outside the local type table | a wider type table, or a capture |
 | 31 types with no module name | no recoverable parent chain or mangled symbol | a capture |
+| velocity curve, split range semantics, voice stealing | not yet decompiled | next action 5 |
+| effect parameter ranges and defaults | not yet decompiled | next action 5 |
 | licence JSON casing, date strategy, grace duration | not statically recoverable | one captured session |
 | Pusher channel and event names, chunk size, payload encryption, tempo authority | not statically recoverable | one captured session |
 
@@ -53,6 +58,7 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
 | module dependency direction is labelled Inferred | section 20 measured co-occurrence, not direction |
 | no third-party audio dependency chosen yet | Core Audio, AVFoundation and Core MIDI cover the engine; add a library only when a concrete need appears |
 | clean-room rules apply to all build work | behaviour from the analysis, no transcribed code, strings or assets |
+| the original sample libraries cannot be reused | they are proprietary content, so an independent sampler and original sounds are required |
 
 ## Commit trail
 
@@ -64,5 +70,7 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
 | `04b2cd5`, `316a8b7` | README corrections for the extractor and reproduce steps |
 | `445fd58` | clean-room implementation plan |
 | `b272896`, `7a2f069` | toolchain bootstrap, then invocation through bash |
+| `d96b996` | this progress log |
+| `d19f6e8` | feature inventory with evidence and gaps |
 
 Earlier analysis commits are listed in the analysis document itself.
