@@ -13,7 +13,8 @@ Nothing here is produced by executing the original app, and no original source w
 | static analysis | 89,486 functions decompiled, 3,186 types recovered, 20 documented sections |
 | feature inventory | capability checklist with evidence and gaps |
 | implementation plan | contracts, milestones, unknowns |
-| app | Swift package with a SwiftUI shell, CoreMIDI input and an AVAudioEngine scaffold |
+| app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue |
+| not yet built | effects chain, patch model, persistence, MIDI controller mapping, `.app` bundle |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -29,20 +30,13 @@ dispatch references over 2,527 descriptors.
 | `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
 | `docs/progress.md` | phase status, next actions, decisions |
 | `docs/re/access-determination.md` | what blocks decompilation and what access it needs |
-| `Package.swift` | Swift package: `SundayKeysCore` library, `SundayKeysApp` executable |
-| `Sources/SundayKeysCore/` | MIDI message parsing, velocity curve, note ranges |
-| `Sources/SundayKeysApp/` | SwiftUI shell, CoreMIDI input, AVAudioEngine render scaffold |
+| `Package.swift` | Swift package: `CSync`, `SundayKeysCore`, `SundayKeysApp` |
+| `Sources/CSync/` | atomic index loads and stores for the audio queue |
+| `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument |
+| `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, CoreMIDI input, AVAudioEngine host |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
 | `.github/workflows/build.yml` | clean build and test on a macOS runner |
-| `tools/bootstrap.sh` | install or verify the local toolchain |
-| `tools/macho.py` | Mach-O parsing, chained fixups, relative pointers, string map |
-| `tools/swift_metadata.py` | Swift type, field and conformance recovery |
-| `tools/literal_refs.py` | literal slot and code-referenced string scan |
-| `tools/swift_names.py` | name derivation from metadata and witness tables |
-| `tools/inventory.py` | function enumeration and coverage statistics |
-| `tools/callgraph.py` | caller to callee edges from a named corpus |
-| `tools/decompile.sh`, `tools/decompile_all.sh`, `tools/pipeline.sh` | Ghidra drivers |
-| `tools/ghidra/` | headless helpers: decompile by address, list functions, apply names |
+| `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
 
 ## Build the app
 
@@ -54,6 +48,19 @@ swift test         # core tests
 The same commands run on a macOS runner for every push, and the check run on a commit carries the
 result. There is no Xcode project yet: the package builds the app target, and bundling it into an
 `.app` is a later step in the roadmap.
+
+## The instrument
+
+The keysounds are synthesised at startup from original partial sets, because the repository ships no
+sample assets and the original libraries are proprietary. It is a wavetable synthesiser:
+
+- additive keys table, twelve partials with even partials attenuated;
+- two-operator FM bell table for the upper layer;
+- 32 voices, 16 per layer, with linear 8 ms attack, 220 ms release and a 4 ms fade before a stolen
+  voice is reused;
+- notes are routed through `LayerRouter`, so a key only reaches layers whose range contains it;
+- events cross to the render thread through a lock-free SPSC ring, so the render block never locks,
+  allocates or drops a buffer.
 
 ## Reproduce the analysis
 
@@ -108,8 +115,10 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
   mappings, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- The audio engine is a scaffold: a try-lock on the render path drops buffers under contention and
-  is scheduled for replacement with a lock-free queue.
+- There is no effects chain, no patch or snapshot model, no persistence and no controller mapping
+  yet, and the package builds an app target rather than a bundled `.app`.
+- The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
+  independently licensed or recorded material.
 
 ## Legal
 
