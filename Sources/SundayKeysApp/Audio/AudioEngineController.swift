@@ -21,7 +21,7 @@ import SundayKeysCore
 ///   detached on the main thread only, before start or after stop
 final class AudioEngineController {
     private let engine = AVAudioEngine()
-    private let layers = KeyLayer.defaultPatch
+    private var currentPatch = Patch.starter
     private var keysound: RealtimeKeysoundEngine?
     private var sourceNode: AVAudioSourceNode?
     private(set) var isRunning = false
@@ -31,8 +31,14 @@ final class AudioEngineController {
         keysound?.voiceCount ?? 0
     }
 
+    /// The patch the graph is voiced for. Assigning while stopped is allowed and
+    /// simply changes what the next `start` builds.
+    var patch: Patch {
+        currentPatch
+    }
+
     var patchLayers: [KeyLayer] {
-        layers
+        currentPatch.layers
     }
 
     func start() throws {
@@ -50,7 +56,7 @@ final class AudioEngineController {
 
         // Built here, on the main thread: wavetable synthesis and voice pool
         // allocation must never happen on the render thread.
-        let keysound = RealtimeKeysoundEngine(sampleRate: rate, layers: layers)
+        let keysound = RealtimeKeysoundEngine(sampleRate: rate, layers: currentPatch.layers)
 
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -107,6 +113,15 @@ final class AudioEngineController {
         }
         keysound = nil
         isRunning = false
+    }
+
+    /// Producer side, so it is safe from the main thread while audio renders: the
+    /// engine swaps its router and pushes the new timbres plus one all-notes-off
+    /// through the same ring notes use. Nothing on the graph is rebuilt, so a
+    /// switch never interrupts the render callbacks.
+    func setPatch(_ patch: Patch) {
+        currentPatch = patch
+        keysound?.setPatch(patch)
     }
 
     func noteOn(note: UInt8, velocity: UInt8) {
