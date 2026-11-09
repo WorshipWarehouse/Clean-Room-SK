@@ -13,10 +13,10 @@ this file tracks state.
 | Design | specification, contracts and feature inventory written | `clean-room-implementation.md`, `feature-inventory.md` |
 | Build, shell | done | commit `43637aa` |
 | Build, instrument | polyphonic wavetable instrument, lock-free command queue, layer routing | `Sources/SundayKeysCore/Audio/` |
-| Test | unit tests for parsing, curves, ranges, the queue, envelopes, stealing and split exclusion | `Tests/SundayKeysCoreTests/` |
+| Test | queue stress, envelope, release, bounded stealing, split exclusion, plus the earlier parsing, curve and range tests | `Tests/SundayKeysCoreTests/`, run `42722698841` |
 
 This is a working instrument, not a finished product. Still missing: the effects chain, the patch
-and snapshot model, persistence, sample assets, and an `.app` bundle.
+and snapshot model, persistence, sample assets, MIDI controller mapping, and an `.app` bundle.
 
 ## Audio milestone: what the instrument actually is
 
@@ -73,12 +73,16 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 ## Build verification
 
 `.github/workflows/build.yml` runs `swift build --build-tests` and `swift test` on a `macos-15`
-runner for every push to main.
+runner for every push to main. The workflow now republishes compiler and test errors as check-run
+annotations, so a failing run is readable without the job log.
 
 | commit | run | conclusion |
 | --- | --- | --- |
-| `43637aa` | [42721262800](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42721262800) | success. Both annotations are workflow notices: a Node 20 deprecation on `actions/checkout@v4` and a macOS queue-time notice, not code warnings. |
-| `33086584` | [42721455596](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42721455596) | success, same two workflow notices |
+| `43637aa` | [42721262800](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42721262800) | success. Both annotations are workflow notices, not code warnings. |
+| `33086584` | [42721455596](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42721455596) | success, same two notices. This resolves the run that was still in flight last session. |
+| `78b907f` | [42722291245](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42722291245) | failure: `UnsafeMutableBufferPointer` has no `initialize(repeating:count:)` or `deinitialize(count:)`; fixed in `57740fe`. |
+| `57740fe` | [42722636068](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42722636068) | compiled fully, then one test failed: the split test expected the voice pool back after 8 blocks, but release is 220 ms and needs 21 blocks at 512 frames. Fixed in `e859ccf`. |
+| `e859ccf` | [42722698841](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42722698841) | success: build and all test suites pass. The only annotations are the Node 20 deprecation warning and the macOS queue-time notice. |
 
 Treat a commit as built only when its own check run is green; later commits re-run the workflow.
 
@@ -101,11 +105,11 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | unknown licence status decodes to `expired` | fail closed rather than unlock features on an unrecognised wire value |
 | module dependency direction is labelled Inferred | section 20 measured co-occurrence, not direction |
 | the original sample libraries cannot be reused | proprietary content, so the keysounds are synthesised from original partial sets |
-| Swift package rather than an Xcode project | builds and tests headlessly on a clean runner |
 | C target for the atomic index operations | the memory orderings are the compiler's own builtins, with no dependency to resolve and no deprecated wrapper |
 | commands are never dropped | the producer spins instead; only the render thread is latency-critical |
 | wavetables and voices are built before the graph starts | allocation must not happen on the render thread |
 | voice stealing fades before retriggering | a hard reassignment is audible as a click |
+| tests own their own block counts | a release window is a property of the envelope, not of the test, so the test renders past it |
 
 ## Commit trail
 
@@ -121,5 +125,10 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | `d1e3854` | log entry for the app target and the access determination |
 | `33086584` | log entry for the green build |
 | `78b907f` | SPSC queue, wavetable instrument, layer routing, audio tests |
+| `31596438` | app hosts the keysound engine; old voice bank superseded |
+| `e174d13` | voice bank deleted; CI republishes build errors as annotations |
+| `a825ae4` | voice pool initialised from locals; layer list computed |
+| `57740fe` | buffer pointer initialise and deinitialise forms |
+| `e859ccf` | split test renders past the release tail |
 
 Earlier analysis commits are listed in the analysis document itself.
