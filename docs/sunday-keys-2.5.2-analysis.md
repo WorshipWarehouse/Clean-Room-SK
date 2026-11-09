@@ -769,3 +769,52 @@ Limits: a descriptor constant proves a dispatch site exists, not which witness s
 that needs the table index at the call, which the decompiled expression carries only partially.
 Descriptors outside the local type table cannot be attributed at all, which is the same boundary
 recorded in sections 16 and 17.
+
+## 20. Module coupling at dispatch sites — Observed (co-occurrence, not direction)
+
+Section 19 counts dispatch per type. The same references, grouped by the function that holds
+them, give a coupling map: which modules have their protocols dispatched inside one function
+body. Blocks were delimited by the decompiler header `### <entry> -> <name> @ <entry>`, which
+appears 2,500 times per chunk and 89,486 times overall.
+
+| property | measured |
+| --- | --- |
+| function bodies scanned | 89486 |
+| bodies referencing at least one attributable conformance | 4868 (5.4 percent) |
+| conformance references inside those bodies | 8622 |
+| distinct modules involved | 29 |
+| distinct module pairs co-dispatched | 6 |
+
+Functions per module:
+
+| module | functions |
+| --- | --- |
+| `SundaySounds` | 1474 |
+| `Networking` | 1145 |
+| `Lottie` | 589 |
+| `Domain` | 477 |
+| `Audio` | 219 |
+| `Alamofire` | 207 |
+| `Storage` | 147 |
+| `Core` | 142 |
+
+| modules co-dispatched | functions |
+| --- | --- |
+| `Domain` + `SundaySounds` | 25 |
+| `Audio` + `Core` | 5 |
+| `Audio` + `Domain` | 1 |
+| `Audio` + `SundaySounds` | 1 |
+
+The finding is how little the modules overlap: 6 distinct pairs across 29
+modules, and every pair except one is in single digits. `Domain` with `SundaySounds` accounts
+for 25 functions, which is the model and UI boundary, and `Audio` with `Core` accounts for 5.
+Everything else is residual. At the protocol dispatch level these modules are close to
+separated, so a replication can build them independently and join them at that single
+boundary.
+
+Limits: co-occurrence is not direction. Nothing here says which module calls which, only that
+one function body dispatches protocols from both, and a body that dispatches a single module
+contributes no pair at all, so the pair counts are a floor rather than a total. The corpus is
+the pre-rename decompilation, so the caller module cannot be read from the function label
+either; recovering direction needs the call graph over renamed bodies, which exists only for
+the 91 functions in section 18.
