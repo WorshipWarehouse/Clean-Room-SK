@@ -56,7 +56,7 @@ public final class RealtimeKeysoundEngine {
     /// sounding voice is released: that is what keeps a key held across the switch
     /// from hanging on a layer that no longer exists, and because release is a
     /// 220 ms fade rather than a cut, the switch is heard as a tail under the new
- patch instead of a gap.
+    /// patch instead of a gap.
     public func setPatch(_ newPatch: Patch) {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
