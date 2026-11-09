@@ -528,29 +528,28 @@ the **endpoint** method: the client asks its own backend to sign the subscriptio
 
 ### Unknown
 
-Literal channel names and event names are **not** recovered, but the search itself now works
-and the negative result is measured. Decoding the chained-fixup rebase format (rebase targets
-are stored as offsets from the image base, not as absolute addresses) changed the slot count
-from 11 to **32,510** and the number of code-referenced strings from 2 to **1,202**.
+Literal channel names and event names are **not** recovered, and an earlier claim in this
+document was wrong. A corrected pass, which ignores code bytes and accepts only real
+eight-byte pointer slots, finds **61** literal slots and **2** code-referenced strings in the
+whole slice.
 
-An earlier `ADRP`+`ADD` scan of the same format strings appeared to yield one hit. That hit
-came from an inverted slot/string map inside my own scanner, which compared slot addresses
-against string addresses; decompiling the result showed SwiftUI environment-warning code,
-which is what exposed the bug. It was an artefact of my tooling rather than a property of the
-binary, and it is recorded here so the dead end is not repeated.
+The retracted pass reported 32,510 slots and 1,202 referenced strings. That was an artefact:
+it also walked the 14 MB of machine code and accepted any eight-byte value whose low 32 bits,
+plus the image base, landed on a string start. With a dense string table this yields tens of
+thousands of coincidental hits, and the functions it surfaced were dependency code (Firebase,
+Google Analytics, Lottie, Realm), which is what exposed the mistake. Both figures and the
+1,202-string table are withdrawn.
 
-None of the recovered application identifiers is a Pusher channel or event name. The only
-app-state key that resolved is `loopConnectDeviceId`, and decompiling its referent gave a
-metadata accessor (`FUN_10066b250`) rather than channel construction. The strings referenced
-from code are dominated by dependencies (Firebase, Google Analytics, Lottie, Realm,
-PusherSwift).
+What remains is informative: application strings here are mostly small-string immediates of
+15 bytes or fewer held inline in registers, not pointer slots into `__cstring`, so a
+literal-driven search for channel names cannot succeed.
 
-A sweep for Swift small-string immediates across the decompiled corpus returned 14 distinct
-values, and they are all enum vocabulary: `expired`, `active`, `slow`, `brake`, `fast`,
-`dynamic`, `ribbon`, `tube`, `classic`, `warm`, `front`, `back`, `instant`, `en_us`. That is
-a useful side result: it shows most enums in this app serialise as their case names
-(`SpeedModeApi`, `MicModelApi`, `CabinetModelApi`, `CabinetSideApi`), which makes
-`LicenseStatusApi.grace_period` the exception rather than the rule.
+A sweep for small-string immediates across the decompiled corpus returned 14 distinct values,
+all enum vocabulary: `expired`, `active`, `slow`, `brake`, `fast`, `dynamic`, `ribbon`,
+`tube`, `classic`, `warm`, `front`, `back`, `instant`, `en_us`. That shows most enums in this
+app serialise as their case names (`SpeedModeApi`, `MicModelApi`, `CabinetModelApi`,
+`CabinetSideApi`), which makes `LicenseStatusApi.grace_period` the exception rather than the
+rule.
 
 The reason no channel literals exist is structural. `PusherDeviceConnectConfig.channel` and
 `PusherAuthRequestApi.channelName` both arrive from `/api/v1/pusher/config` and from the auth
@@ -561,3 +560,54 @@ Also unresolved: the chunk size, whether application payloads are encrypted
 (`private-encrypted-` belongs to the vendored PusherSwift), and whether the server or a peer
 is authoritative for tempo changes.
 
+## 15. Reproducible pipeline — Observed (tooling)
+
+The analysis no longer depends on one-off commands. `tools/` regenerates the artifacts from
+the installed app:
+
+```
+tools/macho.py                 Mach-O geometry, address to C string map,
+                               chained-fixup aware literal slots, code refs
+tools/swift_metadata.py        types, stored properties, conformances -> JSON
+tools/literal_refs.py          string -> code address TSV
+tools/ghidra/DecompileAt.java  decompile a list of addresses
+tools/decompile.sh             analyzeHeadless driver on a saved project
+tools/pipeline.sh              end to end: slice, metadata, refs, optional decompile
+```
+
+Run it with:
+
+```
+GHIDRA_INSTALL_DIR=<ghidra 12.1.x> SK_DECOMPILE=1 \
+  tools/pipeline.sh "/Applications/Sunday Keys.app" /tmp/sk-analysis
+```
+
+Verified against the 2.5.2 arm64 slice (SHA-256 `9ae567e9...`):
+
+| artifact | verified result |
+| --- | --- |
+| Swift types | 3186 (SundaySounds 729, Lottie 229, Domain 167, Storage 138, Networking 126, Audio 109) |
+| conformances | 4864 |
+| `UserSessionApi` fields | maxAvailableBackups, maxAvailableAudioOutputs, userRole, license, accessibleProducts |
+| `LicenseApi` fields | status, gracePeriodEndsAt |
+| literal slots | 61 |
+| code-referenced strings | 2 |
+
+The type count and both licence-model field lists match the artifacts recovered earlier in
+this analysis exactly, which is what makes the pipeline trustworthy for extending coverage
+elsewhere.
+
+Field layout confirmed from raw descriptor bytes: the field descriptor sits at descriptor+16,
+record size is a u16 at +10 (12 in this build), the count is a u32 at +12, records start at
++16, and the field name is at record+8 as a plain relative pointer. Treating that pointer as
+indirectable silently drops fields whose offset happens to be odd, which is exactly what
+happened before the fix.
+
+**Known gap.** The earlier session parser recorded 5,068 conformances against 4864 here, a
+shortfall of 204. Types agree exactly, so the residual is in the conformance table walk
+rather than type discovery. It is recorded rather than hidden, and `tools/swift_metadata.py`
+is the place to fix it.
+
+Decompilation needs a saved Ghidra project: a fresh import of this binary takes roughly ten
+minutes and does not fit in a single command window, so import once and reuse with
+`-noanalysis`, which brings repeat runs down to seconds.
