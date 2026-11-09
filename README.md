@@ -19,8 +19,9 @@ executed as part of this analysis, and no original source was consulted.
 | documented sections | 20 in `docs/sunday-keys-2.5.2-analysis.md` |
 
 The full findings live in [`docs/sunday-keys-2.5.2-analysis.md`](docs/sunday-keys-2.5.2-analysis.md),
-and the plan for rebuilding from them is in
-[`docs/clean-room-implementation.md`](docs/clean-room-implementation.md).
+the plan for rebuilding from them is in
+[`docs/clean-room-implementation.md`](docs/clean-room-implementation.md), and the place to resume
+work from is [`docs/progress.md`](docs/progress.md).
 
 ## Layout
 
@@ -28,6 +29,7 @@ and the plan for rebuilding from them is in
 | --- | --- |
 | `docs/sunday-keys-2.5.2-analysis.md` | the deliverable: 20 sections of findings |
 | `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
+| `docs/progress.md` | phase status, next actions, decisions |
 | `tools/bootstrap.sh` | install or verify the local toolchain |
 | `tools/macho.py` | Mach-O parsing, chained fixups, relative pointers, string map |
 | `tools/swift_metadata.py` | Swift type, field and conformance recovery |
