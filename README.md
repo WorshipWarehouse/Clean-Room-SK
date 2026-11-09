@@ -28,6 +28,7 @@ and the plan for rebuilding from them is in
 | --- | --- |
 | `docs/sunday-keys-2.5.2-analysis.md` | the deliverable: 20 sections of findings |
 | `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
+| `tools/bootstrap.sh` | install or verify the local toolchain |
 | `tools/macho.py` | Mach-O parsing, chained fixups, relative pointers, string map |
 | `tools/swift_metadata.py` | Swift type, field and conformance recovery |
 | `tools/literal_refs.py` | literal slot and code-referenced string scan |
@@ -46,6 +47,9 @@ Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the a
 ```bash
 export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.4_PUBLIC
 export GHIDRA_HEADLESS_MAXMEM=8G
+
+# 0. verify or install the toolchain
+tools/bootstrap.sh --check
 
 # 1. thin the universal binary to arm64
 lipo -thin arm64 "/Applications/Sunday Keys.app/Contents/MacOS/Sunday Keys" \
