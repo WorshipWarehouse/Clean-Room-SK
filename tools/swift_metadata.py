@@ -22,6 +22,7 @@ bit set marks an indirect pointer, whose target is another relative pointer.
 
 import argparse
 import json
+import re
 import struct
 import sys
 from pathlib import Path
@@ -59,15 +60,57 @@ class SwiftMetadata:
                     entries.append(target)
         return entries
 
-    def _parent_of(self, descriptor):
-        """Return the immediate parent type name for a context descriptor."""
-        parent = self.image.relative(descriptor + 4)
-        if not parent:
-            return None
-        name_offset = self.image.read_i32(parent + 8)
+    def _descriptor_name(self, descriptor):
+        """Read the plain relative name pointer of a context descriptor."""
+        name_offset = self.image.read_i32(descriptor + 8)
         if name_offset is None:
             return None
-        return self.image.read_cstring(parent + 8 + name_offset)
+        return self.image.read_cstring(descriptor + 8 + name_offset)
+
+    def _module_of(self, descriptor):
+        """Walk to the module descriptor, which is the context with kind zero.
+
+        Nested types point at their enclosing type, so the immediate parent is
+        not the module. Walking to the first kind zero context avoids returning
+        a type name as the module; the name is validated so a chain that lands
+        outside the metadata cannot leak raw bytes into the result.
+        """
+        seen = set()
+        current = descriptor
+        last_valid = None
+        for _ in range(8):
+            parent = self.image.relative(current + 4)
+            if not parent or parent in seen:
+                break
+            seen.add(parent)
+            name = self._descriptor_name(parent)
+            if is_identifier(name):
+                last_valid = name
+                flags = self.image.read_u32(parent)
+                if flags is not None and (flags & 0x1F) == 0:
+                    return name
+            current = parent
+        return last_valid
+
+    def _module_from_mangling(self, descriptor):
+        """Recover the module from the mangled symbol when the chain fails.
+
+        A mangled name begins with the module as a length prefixed component,
+        for example _$s13SundaySounds11SoundModelV, so the declared length must
+        equal the parsed identifier length before the value is trusted.
+        """
+        for delta in (16, 20):
+            target = self.image.relative(descriptor + delta)
+            if not target:
+                continue
+            symbol = self.image.read_cstring(target) or ""
+            match = re.match(r"_?\$s(\d+)([A-Za-z_][A-Za-z0-9_]*)", symbol)
+            if not match:
+                continue
+            if len(match.group(2)) != int(match.group(1)):
+                continue
+            return match.group(2)
+        return None
 
     def read_types(self):
         for descriptor in self._type_entries():
@@ -86,7 +129,7 @@ class SwiftMetadata:
             )
             if not is_identifier(name):
                 continue
-            parent = self._parent_of(descriptor)
+            parent = self._module_of(descriptor) or self._module_from_mangling(descriptor)
             fields = []
             if kind in (17, 18):
                 field_descriptor = self.image.relative(descriptor + 16)

@@ -716,51 +716,56 @@ capture indirect dispatch, so the true flow is broader than the table shows.
 
 Direct call edges miss protocol dispatch, but every dispatch site keeps its conformance
 descriptor constant in the decompiled C, so those sites can be counted and resolved back to
-types. Descriptor addresses were matched against the metadata table using the layout
-confirmed earlier (the witness table sits eight bytes after the descriptor).
+types. Descriptor addresses were matched against the metadata table using the layout confirmed
+earlier (the witness table sits eight bytes after the descriptor).
 
 | property | measured |
 | --- | --- |
-| types with well formed metadata names | 3099 of 3186 |
-| malformed type records excluded from attribution | 87 |
-| conformances attributable to a well formed type | 4505 of 5068 |
+| types parsed | 3186 |
+| types with no module name recovered | 31 |
+| conformances attributable to a local type | 4864 of 5068 |
 | distinct descriptors referenced in decompiled C | 2527 |
 | total references | 8856 |
-| references resolving to a well formed type | 7706 |
-| references not attributable | 1150 |
+| references resolving to a local type | 8622 |
+| references not attributable | 234 |
 | witness table loads (`_swift_getWitnessTable`) | 8247 |
-| share of attributable conformances that dispatch somewhere | 49.0 percent |
+| share of attributable conformances that dispatch somewhere | 50.8 percent |
 
 Most dispatched types across the whole corpus:
 
 | type | references |
 | --- | --- |
-| `M.CodingKeys` | 1233 |
+| `Networking.CodingKeys` | 1187 |
+| `Lottie.CodingKeys` | 597 |
 | `Audio.AudioActor` | 204 |
 | `Alamofire.AFError` | 157 |
 | `SundaySounds.LocText` | 92 |
+| `Storage.CodingKeys` | 84 |
 | `Storage.DatabaseActor` | 80 |
 | `SundaySounds.PopupView` | 63 |
-| `M.Content` | 51 |
+| `SundaySounds.Content` | 57 |
+| `FirebaseCoreInternal.CodingKeys` | 56 |
 | `Core.ThrowingTaskPublisher` | 46 |
-| `Kingfisher.KingfisherError` | 42 |
-| `Domain.SoundModel` | 38 |
-| `SundaySounds.TitlePopupView` | 37 |
-| `LayoutDropdown.SendingModifier` | 28 |
+| `Core.CodingKeys` | 42 |
 
 This is the indirect counterpart to section 18. There the edge count was dominated by witness
-bodies that call nothing named; here the same types appear as descriptor constants at the
-sites that perform protocol dispatch, which is the traffic the direct graph cannot see. The
-corpus is the pre-rename decompilation, so surrounding function labels are the old `FUN_`
-ones, but descriptor constants are unaffected by renaming.
+bodies that call nothing named; here the same types appear as descriptor constants at the sites
+that perform protocol dispatch, which is the traffic the direct graph cannot see. The corpus is
+the pre-rename decompilation, so surrounding function labels are the old `FUN_` ones, but
+descriptor constants are unaffected by renaming. Licence traffic is small but present: 54
+references across 13 licence typed conformances, led by `AccessibleProductApi`, `UserRoleApi`
+and `LicenseStatusApi` at eight each.
 
-Attribution here is stricter than section 16: 87 type records carry malformed name or
-module bytes, and a first pass resolved some references onto them, which put junk module
-strings such as a lone control character into the ranking. Those records are excluded, so
-every row above is a real type name. The excluded count is small enough that the ranking is
-unchanged in substance, but the earlier version of this table overstated the total.
+Module names are now read correctly. The previous version of this table read the module from
+the immediate parent context, which is the enclosing type for nested types, and did not
+validate the result, so 87 records carried raw bytes such as a lone control character
+and were excluded from attribution. The parent chain is now walked to the first context with
+kind zero, which is the module descriptor, with the length prefixed mangled symbol as a
+fallback: 87 of the 87 were recovered from the chain and 0 from the
+mangled name, all of them in `SundaySounds`. Restoring those records raises attributable
+references from 7706 to 8622 and leaves 234 unattributable.
 
-Limits: a descriptor constant proves a dispatch site exists, not which witness slot it
-invokes; that needs the table index at the call, which the decompiled expression carries only
-partially. Descriptors outside the local type table cannot be attributed at all, which is the
-same boundary recorded in sections 16 and 17.
+Limits: a descriptor constant proves a dispatch site exists, not which witness slot it invokes;
+that needs the table index at the call, which the decompiled expression carries only partially.
+Descriptors outside the local type table cannot be attributed at all, which is the same boundary
+recorded in sections 16 and 17.
