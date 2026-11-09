@@ -71,9 +71,12 @@ public final class PolyphonicInstrument {
         voicesPerLayer: Int = 16
     ) {
         let rate = sampleRate > 0 ? sampleRate : 48_000
+        let voiceLimit = max(1, maxVoices)
+        let perLayerLimit = max(1, min(voicesPerLayer, voiceLimit))
+
         self.sampleRate = rate
-        self.maxVoices = max(1, maxVoices)
-        self.voicesPerLayer = max(1, min(voicesPerLayer, max(1, maxVoices)))
+        self.maxVoices = voiceLimit
+        self.voicesPerLayer = perLayerLimit
 
         attackFrames = max(1, Float(0.008 * rate))
         releaseFrames = max(1, Float(0.220 * rate))
@@ -96,9 +99,8 @@ public final class PolyphonicInstrument {
         }
         layerOffset = offsets
 
-        let count = self.maxVoices
-        voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: count)
-        voices.initialize(repeating: Voice(), count: count)
+        voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: voiceLimit)
+        voices.initialize(repeating: Voice(), count: voiceLimit)
 
         voiceCounter = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
         voiceCounter.initialize(to: 0)

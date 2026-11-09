@@ -9,15 +9,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var midiSources: [String] = []
     @Published private(set) var lastEvent = "none"
     @Published private(set) var voiceCount = 0
-    @Published private(set) var layers: [KeyLayer] = []
     @Published private(set) var heldNotes: Set<UInt8> = []
 
     private let audio = AudioEngineController()
     private let midi = MIDIInputService()
     private var meter: Timer?
 
-    init() {
-        layers = audio.patchLayers
+    /// The patch the engine is currently voiced for. Read through the controller
+    /// so the UI cannot display a layer set the audio graph is not using.
+    var layers: [KeyLayer] {
+        audio.patchLayers
     }
 
     func start() {
