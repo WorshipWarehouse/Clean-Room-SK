@@ -2,6 +2,16 @@ import XCTest
 @testable import SundayKeysCore
 
 final class PatchPersistenceTests: XCTestCase {
+    /// Stable identity on purpose. A decoded bank has to carry the same patch ids,
+    /// because that is how a relaunch finds the patch the player last selected;
+    /// a fixture that minted fresh random ids on every call could never assert
+    /// that, and comparing two independently built banks would only ever compare
+    /// random values.
+    private enum Identity {
+        static let worshipPad = UUID(uuidString: "A1A1A1A1-0000-4000-8000-000000000001") ?? UUID()
+        static let splitNight = UUID(uuidString: "A1A1A1A1-0000-4000-8000-000000000002") ?? UUID()
+    }
+
     private func temporaryStore() -> PatchStore {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("SundayKeysTests", isDirectory: true)
@@ -11,11 +21,11 @@ final class PatchPersistenceTests: XCTestCase {
 
     private func sampleBank() -> PatchBank {
         PatchBank(patches: [
-            Patch(name: "Worship Pad", layers: [
+            Patch(id: Identity.worshipPad, name: "Worship Pad", layers: [
                 KeyLayer(id: 0, name: "Keys", range: NoteRange(41, 88), transpose: -12, gain: 0.7, timbre: .keys, enabled: true),
                 KeyLayer(id: 1, name: "Bell", range: NoteRange(72, 96), transpose: 12, gain: 0.35, timbre: .bell, enabled: false),
             ]),
-            Patch(name: "Split Night", layers: [
+            Patch(id: Identity.splitNight, name: "Split Night", layers: [
                 KeyLayer(id: 0, name: "Low", range: NoteRange(24, 59), gain: 0.9, timbre: .keys, enabled: true),
                 KeyLayer(id: 1, name: "High", range: NoteRange(60, 96), transpose: 7, gain: 0.6, timbre: .bell, enabled: true),
             ]),
@@ -32,6 +42,7 @@ final class PatchPersistenceTests: XCTestCase {
         XCTAssertEqual(loaded, bank)
         XCTAssertEqual(loaded.version, PatchBank.currentVersion)
         XCTAssertEqual(loaded.patches.count, 2)
+        XCTAssertEqual(loaded.patches.map(\.id), [Identity.worshipPad, Identity.splitNight])
         XCTAssertEqual(loaded.patches[0].layers[0].range, NoteRange(41, 88))
         XCTAssertEqual(loaded.patches[0].layers[0].transpose, -12)
         XCTAssertEqual(loaded.patches[0].layers[0].gain, 0.7, accuracy: 0.0001)
@@ -48,6 +59,7 @@ final class PatchPersistenceTests: XCTestCase {
         let loaded = try relaunched.load()
 
         XCTAssertEqual(loaded, sampleBank())
+        XCTAssertEqual(loaded.patches.map(\.id), [Identity.worshipPad, Identity.splitNight])
     }
 
     func testMissingFileLoadsTheStarterBank() throws {
@@ -212,6 +224,43 @@ final class PatchSwitchingTests: XCTestCase {
 
         XCTAssertEqual(engine.voiceCount, 1)
         XCTAssertGreaterThan(peak(samples), 0.001)
+    }
+
+    /// A live edit of the patch being played updates routing without releasing
+    /// what is sounding, which is what the app does while a slider is moving.
+    func testLiveEditLeavesSoundingVoicesAlive() {
+        let engine = RealtimeKeysoundEngine(sampleRate: 48_000)
+        engine.noteOn(note: 60, velocity: 110)
+        _ = render(engine, blocks: 1)
+        XCTAssertEqual(engine.voiceCount, 1)
+
+        var edited = engine.patch
+        edited.layers[0].gain = 0.4
+        engine.setPatch(edited, releasingVoices: false)
+
+        let samples = render(engine, blocks: 2)
+        XCTAssertEqual(engine.voiceCount, 1, "a gain edit must not cut the note under the player's hands")
+        XCTAssertGreaterThan(peak(samples), 0.001)
+    }
+
+    /// The edited gain has to reach the render thread: a note started after the
+    /// edit is quieter than the same note started before it.
+    func testLiveEditAppliesToTheNextNote() {
+        let engine = RealtimeKeysoundEngine(sampleRate: 48_000)
+        engine.noteOn(note: 60, velocity: 110)
+        let loud = peak(render(engine, blocks: 2))
+        engine.allNotesOff()
+        _ = render(engine, blocks: 40)
+
+        var edited = engine.patch
+        edited.layers[0].gain = 0.2
+        engine.setPatch(edited, releasingVoices: false)
+
+        engine.noteOn(note: 60, velocity: 110)
+        let quiet = peak(render(engine, blocks: 2))
+
+        XCTAssertLessThan(quiet, loud * 0.6)
+        XCTAssertGreaterThan(quiet, 0.0001)
     }
 
     func testSwitchingInsideALiveRenderLoopNeverFallsSilent() {
