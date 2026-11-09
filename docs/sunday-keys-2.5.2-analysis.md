@@ -447,3 +447,92 @@ AISoundApi                  tags               AISoundReportApi  name
 Caveat: enum case names are Swift identifiers. Where they are used as wire values they may be
 re-spelled (as `grace_period` shows), so this section is a vocabulary of names, not a capture.
 
+## 14. Realtime device mesh — Observed (metadata + string table)
+
+Pusher here is not only server-to-client push: the same transport is a **peer mesh between
+the user's own devices**. The evidence is a set of types that only make sense when two
+installs talk to each other.
+
+**Connection and identity**
+
+```
+Networking.PusherConfig          cluster, appKey            (GET  /api/v1/pusher/config)
+Networking.PusherAuthRouter      accessCode, machineId, fetchAuth
+Networking.PusherClient          pusher, accessCode, machineId, errorSubject
+Networking.PusherClientError     code, message
+PusherMessagingService           chunkedProcessor, dependencies, router, config,
+   (DomainLogic, ObservableObject) connectableDevicesSubject, _isNetworkConnected,
+                                  errorHandlingBag, bag
+  .ConnectionData                accessCode, machineId, pusherConfig
+  .Dependencies                  engine, deviceStorage, router, pusherConfig,
+                                  networkConnectedStatus, error
+```
+
+An `accessCode` plus a `machineId` is what identifies a peer, so authorisation is granted per
+machine rather than per user. `PusherMessagingService.Dependencies` shows the service is
+wired directly to the audio `engine` and to `deviceStorage`, i.e. it exists to move musical
+state, not just notifications.
+
+**Discovery and pairing**
+
+```
+Networking.PusherDevice            machineId, machineName, machineOS
+Networking.PusherDeviceSearchConfig  presence
+Networking.PusherDeviceConnectConfig channel, machinePresence
+Domain.LoopConnectionPusherModel   id, name, markers, connectedToId, connectKey,
+                                   connectedTempoTimeSignature
+LoopPrimeMarkerConnectionInfo      id, name, connectedToId
+Storage fields                     _accessCode, _loopConnectAccessCode, loopConnectAccessCode
+```
+
+Search returns `PusherDevice` values through `connectableDevicesSubject`; connecting yields a
+`channel` and a `machinePresence`, so discovery itself runs on presence channels. The
+persisted `loopConnectAccessCode` / `connectKey` is the remembered pairing that lets a
+previously connected device come back without a new search.
+
+**Message vocabulary**
+
+```
+PusherRhythmSettingsEvent          multitrackId, settings {tempo, key, timeSignature}
+PusherPlaybackRhythmSettingsEvent  playbackEventId, rhythmSettings
+PusherSetlist                      multitracks [{id, name, sections}]
+Core.PusherSetlistModel            multitracks
+PusherTransitionSettings           timeById [TransitionTime = beat | time]
+Networking.ChunkedMessageProcessor chunksById
+Networking.ChunkedMessageError     missingField
+```
+
+Tempo, key, time signature, setlist contents and per-transition timings all travel over this
+channel — the shapes are the same ones the local models hold, so a peer applies them straight
+to its engine.
+
+**Chunking**
+
+`ChunkedMessageProcessor` keys partial messages by id and `ChunkedMessageError.missingField`
+is its failure mode; the string table carries `Received a setlist chunk %@`, `Received a
+setlist`, and `Error receiving chunked message: `. Setlists are therefore split into chunks,
+reassembled per id, and only applied once complete.
+
+**Observed log strings** (from the `__cstring` cluster around `Received a setlist`):
+
+```
+Start Pusher device search        Connect to the Pusher device
+Connected Device -> %s            Reconnected Device -> %s
+Disconnect from Pusher            Pusher auth failed: %@
+Subscribed to channel %s          Failed to subscribe to channel %s
+```
+
+The vendored `PusherSwift` copy exposes `AuthMethod { endpoint, authRequestBuilder,
+: authorizer, inline, noMethod }`, and the app's own `/api/v1/pusher/auth` route means it uses
+the **endpoint** method: the client asks its own backend to sign the subscription.
+
+### Unknown
+
+Literal channel names and event names are **not** recovered. Direct `ADRP`+`ADD` scanning for
+references to these log format strings produced one hit, which turned out to be SwiftUI's
+environment-access warning (a false positive), confirming that the app's Swift string literals
+are reached through relative-pointer tables rather than plain address materialisation — the
+same obstacle recorded in §11. Also unresolved: the channel naming convention, the chunk
+size, whether payloads are encrypted (`private-encrypted-` exists but belongs to PusherSwift
+itself), and whether the server or a peer is authoritative for tempo changes.
+
