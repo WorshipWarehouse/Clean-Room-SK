@@ -711,3 +711,48 @@ while 59 of those functions call no named function at all.
 An edge means the caller references that function in its decompiled body. It does not prove a
 protocol requirement name, which the conformance descriptors do not carry, and it does not
 capture indirect dispatch, so the true flow is broader than the table shows.
+
+## 19. Indirect dispatch — Observed (conformance descriptors at call sites)
+
+Direct call edges miss protocol dispatch, but every dispatch site keeps its conformance
+descriptor constant in the decompiled C, so those sites can be counted and resolved back to
+types. Descriptor addresses were matched against the metadata table using the layout
+confirmed earlier (the witness table sits eight bytes after the descriptor).
+
+| property | measured |
+| --- | --- |
+| conformance descriptors resolved to a local type | 4864 |
+| distinct descriptors referenced in decompiled C | 2527 |
+| total references | 8856 |
+| references resolving to a local type | 8622 |
+| references to descriptors outside the local table | 234 |
+| witness table loads (`_swift_getWitnessTable`) | 8247 |
+| share of known conformances that dispatch somewhere | 50.8 percent |
+
+Most dispatched types across the whole corpus:
+
+| type | references |
+| --- | --- |
+| `M.CodingKeys` | 1233 |
+| `.CodingKeys` | 462 |
+| `).CodingKeys` | 218 |
+| `Audio.AudioActor` | 204 |
+| `Alamofire.AFError` | 157 |
+| `SundaySounds.LocText` | 92 |
+| `Storage.DatabaseActor` | 80 |
+| `SundaySounds.PopupView` | 63 |
+| `M.Content` | 51 |
+| `Core.ThrowingTaskPublisher` | 46 |
+| `Kingfisher.KingfisherError` | 42 |
+| `Domain.SoundModel` | 38 |
+
+This is the indirect counterpart to section 18. There the edge count was dominated by witness
+bodies that call nothing named; here the same types show up as descriptor constants at the
+sites that perform protocol dispatch, which is the traffic the direct graph cannot see. The
+corpus is the pre-rename decompilation, so the surrounding function labels are the old
+`FUN_` ones, but the descriptor constants are unaffected by renaming.
+
+Limits: a descriptor constant proves a dispatch site exists, not which witness slot it
+invokes; that needs the table index at the call, which the decompiled expression carries only
+partially. Descriptors outside the local type table cannot be attributed at all, which is the
+same boundary recorded in sections 16 and 17.
