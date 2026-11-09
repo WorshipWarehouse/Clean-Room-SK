@@ -16,7 +16,9 @@ public struct LayerNote: Equatable, Sendable {
 /// Maps a played key to the layers that should sound.
 ///
 /// Runs on the control thread only: it allocates the result array there, which
-/// is why the render thread never calls it.
+/// is why the render thread never calls it. A layer is skipped when it is
+/// disabled or when the played key is outside its range, so neither case can
+/// reach the render thread at all.
 public struct LayerRouter: Sendable {
     public let layers: [KeyLayer]
 
@@ -27,7 +29,7 @@ public struct LayerRouter: Sendable {
     public func route(note: UInt8, velocityGain: Float = 1) -> [LayerNote] {
         var result: [LayerNote] = []
         result.reserveCapacity(layers.count)
-        for layer in layers where layer.range.contains(note) {
+        for layer in layers where layer.enabled && layer.range.contains(note) {
             let gain = max(0, min(1, layer.gain * velocityGain))
             result.append(LayerNote(layer: layer.id, note: Self.transpose(note, by: layer.transpose), gain: gain))
         }

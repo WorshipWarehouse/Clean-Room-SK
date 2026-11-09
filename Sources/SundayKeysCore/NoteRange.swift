@@ -38,3 +38,10 @@ public struct NoteRange: Equatable, Sendable {
         return note
     }
 }
+
+extension NoteRange: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case lower
+        case upper
+    }
+}

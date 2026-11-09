@@ -10,6 +10,10 @@ public struct RenderCommand: Equatable, Sendable {
         case noteOn = 1
         case noteOff = 2
         case allNotesOff = 3
+        /// Retargets a layer's timbre without touching any sounding voice.
+        /// `note` carries the timbre index here (0 for keys, 1 for bell) because
+        /// the command is a fixed-size slot and the field is free for this kind.
+        case setLayerTimbre = 4
     }
 
     public var kind: Kind

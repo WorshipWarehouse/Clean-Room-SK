@@ -54,7 +54,10 @@ public final class PolyphonicInstrument {
     private let voices: UnsafeMutableBufferPointer<Voice>
     private let tableData: UnsafeMutablePointer<Float>
     private let tableLength: Int
-    private let layerOffset: [Int]
+    /// Table offset per layer id, mutated only on the render thread by a
+    /// `setLayerTimbre` command. A raw buffer rather than an array so retargeting
+    /// a layer mid-performance cannot trigger copy-on-write bookkeeping.
+    private let layerTimbre: UnsafeMutablePointer<Int>
     private let voiceCounter: UnsafeMutablePointer<UInt64>
 
     private let attackFrames: Float
@@ -93,11 +96,11 @@ public final class PolyphonicInstrument {
             tableData[length + index] = bell.samples[index]
         }
 
-        var offsets = [Int](repeating: 0, count: 128)
+        layerTimbre = UnsafeMutablePointer<Int>.allocate(capacity: 128)
+        layerTimbre.initialize(repeating: 0, count: 128)
         for layer in layers {
-            offsets[Int(layer.id) & 0x7F] = layer.timbre == .bell ? length : 0
+            layerTimbre[Int(layer.id) & 0x7F] = layer.timbre == .bell ? length : 0
         }
-        layerOffset = offsets
 
         voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: voiceLimit)
         voices.initialize(repeating: Voice())
@@ -111,6 +114,8 @@ public final class PolyphonicInstrument {
         voices.deallocate()
         tableData.deinitialize(count: tableLength * 2)
         tableData.deallocate()
+        layerTimbre.deinitialize(count: 128)
+        layerTimbre.deallocate()
         voiceCounter.deinitialize(count: 1)
         voiceCounter.deallocate()
     }
@@ -130,6 +135,8 @@ public final class PolyphonicInstrument {
             release(note: command.note, layer: command.layer)
         case .allNotesOff:
             releaseEverything()
+        case .setLayerTimbre:
+            layerTimbre[Int(command.layer) & 0x7F] = command.note == 1 ? tableLength : 0
         }
     }
 
@@ -188,7 +195,7 @@ public final class PolyphonicInstrument {
                     }
                 }
 
-                let base = layerOffset[Int(voice.layer)]
+                let base = layerTimbre[Int(voice.layer) & 0x7F]
                 let position = voice.phase * Double(tableLength)
                 let first = Int(position)
                 let fraction = Float(position - Double(first))
