@@ -643,3 +643,29 @@ Limits: the output is decompiled C, not runnable source, and it does not name Sw
 witness dispatch. The conformance table matches 4,864 of 5,068 descriptors to local types;
 the 204 remainder reference type descriptors outside `__swift5_types`, which is an inherent
 boundary rather than a parser defect.
+
+## 17. Naming the anonymous bodies — Observed (metadata anchors)
+
+Renaming replaces anonymous `FUN_` labels with names derived from Swift metadata, which is
+what makes the decompilation navigable. `tools/swift_names.py` derives those names from two
+structures that point straight at code: the context descriptor access function, and protocol
+witness tables. Witness tables are encoded differently across builds, so the tool probes a
+four-byte relative and an eight-byte absolute form per table and keeps whichever lands more
+entries inside `__text`. It produced 8,862 names: 3,186 accessors and 5,676 witness slots.
+
+| property | before | after |
+| --- | --- | --- |
+| named functions | 9300 | 18103 |
+| anonymous bodies | 80186 | 71383 |
+
+`tools/ghidra/ApplyNames.java` applies the TSV and refuses to overwrite a function that
+already carries a real symbol, so library names survive. Names follow
+`Module_Type_accessor` and `Module_Type_witnessN`: a licence slot such as
+`Domain_UserLicense_witness26` is identifiable at a glance even though the protocol
+requirement it implements cannot be recovered from the descriptor.
+
+Coverage limit: names attach only where local metadata points, which is 18103 of
+89486 functions ( 20.2 percent ). Dependencies, thunks and Swift runtime helpers
+that no descriptor references stay anonymous. Renaming also does not retroactively change
+decompiled chunk files, which keep the labels they were produced under, so a later decompile
+pass inherits the better names.
