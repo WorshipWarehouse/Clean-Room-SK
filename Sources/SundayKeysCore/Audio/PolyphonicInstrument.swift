@@ -100,14 +100,14 @@ public final class PolyphonicInstrument {
         layerOffset = offsets
 
         voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: voiceLimit)
-        voices.initialize(repeating: Voice(), count: voiceLimit)
+        voices.initialize(repeating: Voice())
 
         voiceCounter = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
         voiceCounter.initialize(to: 0)
     }
 
     deinit {
-        voices.deinitialize(count: voices.count)
+        voices.deinitialize()
         voices.deallocate()
         tableData.deinitialize(count: tableLength * 2)
         tableData.deallocate()
