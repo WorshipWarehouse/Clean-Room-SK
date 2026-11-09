@@ -48,8 +48,9 @@ Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the a
 export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.4_PUBLIC
 export GHIDRA_HEADLESS_MAXMEM=8G
 
-# 0. verify or install the toolchain
-tools/bootstrap.sh --check
+# 0. verify or install the toolchain; run through bash so the stored file mode
+#    does not matter, or chmod +x it once
+bash tools/bootstrap.sh --check
 
 # 1. thin the universal binary to arm64
 lipo -thin arm64 "/Applications/Sunday Keys.app/Contents/MacOS/Sunday Keys" \
