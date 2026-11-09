@@ -158,7 +158,9 @@ final class PolyphonicInstrumentTests: XCTestCase {
         XCTAssertEqual(engine.voiceCount, 3, "80 is inside both layers")
 
         engine.noteOff(note: 80)
-        _ = render(engine, blocks: 8)
+        // The release is 220 ms, which is 10,560 frames at 48 kHz, so this has to
+        // run well past it before the voices are expected back in the pool.
+        _ = render(engine, blocks: 32)
         XCTAssertEqual(engine.voiceCount, 1, "note off must release exactly the layers it started")
     }
 
