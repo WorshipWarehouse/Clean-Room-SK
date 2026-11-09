@@ -1,8 +1,8 @@
 # Progress log and roadmap
 
 The single place to resume from. Read this first when execution restarts, then follow the next
-actions in order. Findings themselves stay in
-[`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md); this file tracks state.
+actions in order. Findings stay in [`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md);
+this file tracks state.
 
 ## Phase status
 
@@ -11,32 +11,47 @@ actions in order. Findings themselves stay in
 | Investigate, static | done for what static methods allow | analysis sections 1 to 20 |
 | Investigate, runtime | not started | needs one captured session |
 | Design | specification, contracts and feature inventory written | `clean-room-implementation.md`, `feature-inventory.md` |
-| Build | not started | needs a reachable machine with Xcode |
-| Test | not started | follows the build |
+| Build | app target exists and is built in CI | `Package.swift`, `Sources/`, `.github/workflows/build.yml` |
+| Test | core unit tests exist and run in CI | `Tests/SundayKeysCoreTests/` |
 
-A completed analysis is not a product. No application source exists yet.
+A working package is not the finished product. The app currently has a shell, MIDI input and an
+engine scaffold; there is no sampler, no effects, no patch management and no persistence yet.
 
-## Blocking dependency
+## Decompilation: awaiting external access
 
-The build machine has been unreachable during the last several sessions, so nothing could be
-compiled, and the whole-program re-decompilation could not run. Tool installation has the same
-dependency: it needs a shell on that machine, so it cannot be delegated.
+No artifact that can be decompiled is reachable from this environment. The shell tool refused
+every call with "run_terminal_command is not currently available", which means the desktop client
+is not connected to the host: no process can be started, so no path can be examined and no Ghidra
+run is possible. The repository tree was enumerated through the GitHub API and contains only docs,
+tools and Swift sources: no Mach-O, `.app`, AUv3 bundle, `.aupreset`, CAF payload, Ghidra project or
+prior decompilation export. Details and the exact access required are in
+[`re/access-determination.md`](re/access-determination.md).
+
+Required to resume decompilation: the Mac awake with the Freebuff desktop client connected,
+`/Applications/Sunday Keys.app` installed, Ghidra 12.1.4 and Java 21 or newer reinstalled under a
+persistent path rather than `/tmp`, and about ten minutes for a fresh import.
 
 ## Next actions, in order
 
-1. `bash tools/bootstrap.sh --check` and install whatever it reports. Ghidra previously lived
-   under `/tmp`, which does not survive a reboot, so expect to reinstall it.
-2. `tools/decompile_all.sh /tmp/sk-named 2500 0`, about 11 minutes over 38 chunks, to produce a
-   corpus whose bodies carry the metadata-derived names applied in section 17.
+1. Reconnect the host, then `bash tools/bootstrap.sh --check` and install what it reports.
+2. `tools/decompile_all.sh /tmp/sk-named 2500 0`, about eleven minutes over 38 chunks.
 3. `python3 tools/callgraph.py --corpus /tmp/sk-named --names /tmp/sk-full/functions-named.tsv
-   --out /tmp/callgraph.tsv`. This script has never been executed; if its summary reports zero
-   bodies, the chunk header pattern is wrong and needs fixing before the numbers mean anything.
-4. Add analysis section 21: module direction, replacing the co-occurrence limit stated at the
-   end of section 20.
-5. Work the decompilation targets listed at the end of `feature-inventory.md`, starting with
-   `Audio.KeyboardVelocityScaling`, `Audio.LayerRangeLimit` with `Domain.RangeApi`, and the MIDI
-   learn tables.
-6. Begin M1, the licence and session module in a Swift package, then build it.
+   --out /tmp/callgraph.tsv`. Never executed; if it reports zero bodies the header pattern is
+   wrong and must be fixed before the numbers mean anything.
+4. Decompile the queued targets: `Audio.KeyboardVelocityScaling`, `Audio.LayerRangeLimit` with
+   `Domain.RangeApi`, the Realm MIDI learn tables, `Audio.SamplerPlugin` voice handling, and the
+   rotor, chorus and delay parameter ranges. Commit extracts under `docs/re/` with provenance.
+5. Add analysis section 21 for module direction.
+6. Replace the render-path try-lock in `VoiceBank` with a lock-free single producer queue, then
+   add a sample playback instrument behind `AudioEngineController`.
+7. Add patch and snapshot models with Codable persistence, then the patch switching path.
+
+## Build verification
+
+`.github/workflows/build.yml` runs `swift build --build-tests` and `swift test` on a `macos-15`
+runner for every push to main. Build run for commit `43637aa`:
+<https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42721262800>. Treat a commit as
+built only when its own check run is green.
 
 ## Coverage that remains
 
@@ -45,10 +60,10 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
 | call direction between modules | corpus is pre-rename | next actions 2 and 3 |
 | 234 unattributable dispatch references | descriptors outside the local type table | a wider type table, or a capture |
 | 31 types with no module name | no recoverable parent chain or mangled symbol | a capture |
-| velocity curve, split range semantics, voice stealing | not yet decompiled | next action 5 |
-| effect parameter ranges and defaults | not yet decompiled | next action 5 |
-| licence JSON casing, date strategy, grace duration | not statically recoverable | one captured session |
-| Pusher channel and event names, chunk size, payload encryption, tempo authority | not statically recoverable | one captured session |
+| velocity curve, split range semantics, voice stealing | not yet decompiled | next action 4 |
+| effect parameter ranges and defaults | not yet decompiled | next action 4 |
+| licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
+| sample playback, effects, patches, persistence | not implemented | next actions 6 and 7 |
 
 ## Decisions recorded
 
@@ -56,21 +71,21 @@ dependency: it needs a shell on that machine, so it cannot be delegated.
 | --- | --- |
 | unknown licence status decodes to `expired` | fail closed rather than unlock features on an unrecognised wire value |
 | module dependency direction is labelled Inferred | section 20 measured co-occurrence, not direction |
-| no third-party audio dependency chosen yet | Core Audio, AVFoundation and Core MIDI cover the engine; add a library only when a concrete need appears |
-| clean-room rules apply to all build work | behaviour from the analysis, no transcribed code, strings or assets |
-| the original sample libraries cannot be reused | they are proprietary content, so an independent sampler and original sounds are required |
+| the original sample libraries cannot be reused | proprietary content, so an independent sampler and original sounds are required |
+| Swift package rather than an Xcode project | builds and tests headlessly on a clean runner, which is the only verification available while the host is away |
+| render path try-locks instead of blocking | a dropped buffer is better than a stalled audio device, and it is a known staging step |
+| velocity curve constants are independent | the original curve could not be read statically, so the shape is ours and replaceable |
 
 ## Commit trail
 
 | commit | purpose |
 | --- | --- |
-| `6981402` | module coupling map |
-| `22e93a2` | repository README |
-| `1b76ae9` | call graph extractor |
-| `04b2cd5`, `316a8b7` | README corrections for the extractor and reproduce steps |
 | `445fd58` | clean-room implementation plan |
 | `b272896`, `7a2f069` | toolchain bootstrap, then invocation through bash |
 | `d96b996` | this progress log |
-| `d19f6e8` | feature inventory with evidence and gaps |
+| `d19f6e8`, `a54d013` | feature inventory, then log update |
+| `4cb34dc` | Swift package, core module, tests, CI workflow |
+| `43637aa` | SwiftUI shell, CoreMIDI input, AVAudioEngine scaffold, access determination |
+| `5d7a070` | README describing the package |
 
 Earlier analysis commits are listed in the analysis document itself.
