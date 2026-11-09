@@ -721,21 +721,20 @@ confirmed earlier (the witness table sits eight bytes after the descriptor).
 
 | property | measured |
 | --- | --- |
-| conformance descriptors resolved to a local type | 4864 |
+| types with well formed metadata names | 4505 of 3186 |
+| malformed type records excluded from attribution | 87 |
 | distinct descriptors referenced in decompiled C | 2527 |
 | total references | 8856 |
-| references resolving to a local type | 8622 |
-| references to descriptors outside the local table | 234 |
+| references resolving to a well formed type | 7706 |
+| references not attributable | 1150 |
 | witness table loads (`_swift_getWitnessTable`) | 8247 |
-| share of known conformances that dispatch somewhere | 50.8 percent |
+| share of attributable conformances that dispatch somewhere | 49.0 percent |
 
 Most dispatched types across the whole corpus:
 
 | type | references |
 | --- | --- |
 | `M.CodingKeys` | 1233 |
-| `.CodingKeys` | 462 |
-| `).CodingKeys` | 218 |
 | `Audio.AudioActor` | 204 |
 | `Alamofire.AFError` | 157 |
 | `SundaySounds.LocText` | 92 |
@@ -745,12 +744,20 @@ Most dispatched types across the whole corpus:
 | `Core.ThrowingTaskPublisher` | 46 |
 | `Kingfisher.KingfisherError` | 42 |
 | `Domain.SoundModel` | 38 |
+| `SundaySounds.TitlePopupView` | 37 |
+| `LayoutDropdown.SendingModifier` | 28 |
 
 This is the indirect counterpart to section 18. There the edge count was dominated by witness
-bodies that call nothing named; here the same types show up as descriptor constants at the
+bodies that call nothing named; here the same types appear as descriptor constants at the
 sites that perform protocol dispatch, which is the traffic the direct graph cannot see. The
-corpus is the pre-rename decompilation, so the surrounding function labels are the old
-`FUN_` ones, but the descriptor constants are unaffected by renaming.
+corpus is the pre-rename decompilation, so surrounding function labels are the old `FUN_`
+ones, but descriptor constants are unaffected by renaming.
+
+Attribution here is stricter than section 16: 87 type records carry malformed name or
+module bytes, and a first pass resolved some references onto them, which put junk module
+strings such as a lone control character into the ranking. Those records are excluded, so
+every row above is a real type name. The excluded count is small enough that the ranking is
+unchanged in substance, but the earlier version of this table overstated the total.
 
 Limits: a descriptor constant proves a dispatch site exists, not which witness slot it
 invokes; that needs the table index at the call, which the decompiled expression carries only
