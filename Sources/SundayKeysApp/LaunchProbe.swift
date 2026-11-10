@@ -28,6 +28,11 @@ import SundayKeysCore
 ///   created and every online source connected — a zero-source list is a fact
 ///   about the machine, not a failure — 4 no client, 5 no port, 6 a source that
 ///   would not connect.
+/// - `SUNDAYKEYS_PROBE_MIDI_CONNECT=1` publishes a virtual CoreMIDI source and
+///   then runs the same start, so the engine's own enumeration finds a source and
+///   the connect path runs on a machine with no controller. 0 the port connected
+///   it, 7 the system would not publish it, 8 the engine never listed it, 9 it was
+///   listed but never attempted, plus the 4, 5 and 6 above.
 @MainActor
 enum LaunchProbe {
     private static let marker = "SundayKeysApp"
@@ -141,6 +146,52 @@ enum LaunchProbe {
         report("MIDI client disposed")
         exit(verdict.exitCode)
     }
+
+    /// Publishes a source of the probe's own, starts the same client the Start
+    /// button starts, and exits with what that proved.
+    ///
+    /// The connect loop had never run anywhere, because no machine in this
+    /// workflow has a controller. A virtual source is a real endpoint the system
+    /// publishes, so the port's connect takes the same call a device would, and
+    /// the status printed here is derived from the engine's own enumeration rather
+    /// than from the probe's assumption about it.
+    static func probeMIDIConnectIfRequested() {
+        guard let raw = ProcessInfo.processInfo.environment["SUNDAYKEYS_PROBE_MIDI_CONNECT"],
+              raw != "0",
+              !raw.isEmpty
+        else { return }
+
+        report("MIDI connect probe starting")
+        let virtualSource = VirtualMIDISource()
+
+        // Created first, so the engine's own first enumeration already has a
+        // source to connect instead of an empty list.
+        let service = MIDIInputService()
+        var verdict = service.start()
+
+        // A source the system has just accepted is normally listed at once. If the
+        // first enumeration missed it, one more pass is taken before the verdict is
+        // fixed, so a listing that takes a moment is not reported as a missing
+        // source.
+        if case let .created(source) = virtualSource.attempt,
+           let started = verdict.report,
+           !started.inventory.sources.contains(where: { $0.endpoint == source.endpoint || $0.uniqueID == source.uniqueID })
+        {
+            Thread.sleep(forTimeInterval: 0.25)
+            service.refresh()
+            verdict = service.lastVerdict ?? verdict
+        }
+
+        let probe = MIDIConnectProbe(attempt: virtualSource.attempt, verdict: verdict)
+        for line in probe.lines {
+            report(line)
+        }
+
+        service.stop()
+        virtualSource.dispose()
+        report("MIDI connect probe disposed its client and its source")
+        exit(probe.exitCode)
+    }
 }
 
 /// The delegate exists so the probes have a point to report from that is
@@ -152,5 +203,6 @@ final class SundayKeysAppDelegate: NSObject, NSApplicationDelegate {
         LaunchProbe.scheduleProbeExitIfRequested()
         LaunchProbe.probeEngineIfRequested()
         LaunchProbe.probeMIDIIfRequested()
+        LaunchProbe.probeMIDIConnectIfRequested()
     }
 }
