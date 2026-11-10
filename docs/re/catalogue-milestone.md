@@ -67,9 +67,8 @@ No test asserts a model flag, and none re-implements the decoding it is checking
 
 ## Runs read for this increment
 
-Head `f49464bc06e65fdb7e26ca927a12bded69eee2a1` (code and tests; the record you are reading is the
-next commit and is record-only). All five workflows were dispatched by hand on that head and read
-through `LIST_JOBS_FOR_A_WORKFLOW_RUN`.
+Head `f49464bc06e65fdb7e26ca927a12bded69eee2a1` carries the code and the tests. All five workflows
+were dispatched by hand on that head and read through `LIST_JOBS_FOR_A_WORKFLOW_RUN`.
 
 | Workflow | Run | Outcome read | Step-level detail |
 | --- | --- | --- | --- |
@@ -120,8 +119,8 @@ Corrected list for this increment. Nothing below is claimed by the code or by th
 7. **Nothing calls the client yet.** No window, model or session launch constructs
    `CatalogueClient`, so a launched app still shows no catalogue. The next increment is the wiring,
    not this one.
-7. **Real-endpoint behaviour.** 401 for products, offline handling on a real network and the
+8. **Real-endpoint behaviour.** 401 for products, offline handling on a real network and the
    server's actual error text are unverified; every branch is proven only through stubs.
-8. **Unchanged hardware and account blockers.** The real session endpoint, hardware audio output
+9. **Unchanged hardware and account blockers.** The real session endpoint, hardware audio output
    and live MIDI devices remain unverified, as before, because they need the inaccessible Mac, the
    user's account and connected gear.
