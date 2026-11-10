@@ -71,11 +71,11 @@ run_probe() {
   local label="$1" variable="$2" path="$3" pid status deadline
   log="$path"
   printf '== %s ==\n' "$label"
-  printf 'bundle         %s\n' "$app"
+  printf 'bundle          %s\n' "$app"
 
   env "$variable=1" SUNDAYKEYS_PROBE_EXIT_AFTER=20 "$exe" >"$path" 2>&1 &
   pid=$!
-  printf 'pid            %s\n' "$pid"
+  printf 'pid             %s\n' "$pid"
 
   deadline=$(( $(date +%s) + 40 ))
   while still_running "$pid"; do
@@ -91,7 +91,7 @@ run_probe() {
 
   status=0
   wait "$pid" || status=$?
-  printf 'exit status    %s\n\n' "$status"
+  printf 'exit status     %s\n\n' "$status"
   printf -- '---- app output ----\n'
   cat "$path"
   printf -- '---- end app output ----\n\n'
@@ -145,6 +145,14 @@ printf '::notice::MIDI connect probe: virtual source created, engine enumerated 
 
 # 3. The receive path. The connect has to be proven before any of this means
 #    anything, so the same exit status is read here rather than a second run.
+#
+# Every line the receive probe printed is published before anything is asserted,
+# so a step that fails still carries what the app actually saw:
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  printf '::notice::%s\n' "$line"
+done < <(sed -n 's/^SundayKeysApp: \(MIDI receive probe: .*\)$/\1/p' "$log" | sed 's/ pid=[0-9][0-9]*$//')
+
 [[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"
 
 sent="$(grep -cE '^SundayKeysApp: MIDI receive probe: send status 0( pid=[0-9]+)?$' "$log" || true)"
