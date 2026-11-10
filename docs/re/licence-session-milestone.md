@@ -30,7 +30,6 @@ already, and every later milestone depends on the gating it exposes.
 | accessible product is `originProductId`, `productId`, `productVersion` | section 13 | `AccessibleProduct` |
 
 ## What was built
-
 `Sources/SundayKeysCore/Session/Licence.swift`
 
 - `LicenceStatus` with the three observed wire strings. `grace_period` is spelled out because it
@@ -42,7 +41,6 @@ already, and every later milestone depends on the gating it exposes.
 - `LicenceDate`, which accepts every date shape section 12 records as present in the slice.
 
 `Sources/SundayKeysCore/Session/SessionPayload.swift`
-
 - `SessionPayload`, `UserRole`, `AccessibleProduct`, `SessionEntitlements`, `SessionStanding`.
 - `SessionDocument.decode`, which reads the `{data}` / `{error}` envelope and accepts both key
   spellings, because the key strategy is Unknown.
@@ -52,7 +50,6 @@ already, and every later milestone depends on the gating it exposes.
 - `SessionEntitlements.backupAllowed(existingBackups:)` and `audioOutputAllowed(index:)`.
 
 `Sources/SundayKeysCore/Session/SessionClient.swift` - the seam:
-
 - `SessionTransport`: one async method, `send(SessionRequest) async throws -> SessionResponse`.
   Foundation's URL loading is not imported by the core target, so the seam is the only thing a
   test has to stand in for.
@@ -60,7 +57,8 @@ already, and every later milestone depends on the gating it exposes.
   (`statusCode`, `body`), `SessionEndpoint` with `production(token:)` carrying the recorded base
   URL and path, and no request body, because the request body is Unknown.
 - `SessionClient.fetch(at:)`, which builds the request, awaits the transport, and maps the reply
-  into one `SessionClientOutcome`: `.session(payload, standing)` through `SessionDocument.decode`
+  into one `SessionClientOutcome`:
+  `.session(payload, standing)` through `SessionDocument.decode`
   and `SessionGate.standing`, `.unauthorised` for 401/403, `.failed(status:)` for any other
   non-200, `.unreachable(reason)` when the transport throws, `.malformed(SessionDecodingError)`
   for a 200 that is not the recorded envelope. None of these is `expired`.
@@ -73,7 +71,7 @@ already, and every later milestone depends on the gating it exposes.
 - `unknownPrefix` is the fixed phrase every no-verdict line starts with, so a reader cannot
   mistake a failed check for a verdict.
 
-`Sources/SundayKeysCore/Session/LicenceGate.swift` - the playback decision (this pass):
+`Sources/SundayKeysCore/Session/LicenceGate.swift` - the playback decision:
 
 - `LicenceGate` (`permitted` / `refused(line)`), built from a `SessionLaunch`, with
   `permitsPlayback`, `refusalLine` and one `line` (`licensed playback permitted` or
@@ -88,7 +86,7 @@ already, and every later milestone depends on the gating it exposes.
 - `SessionConfiguration` builds a client only when `SUNDAYKEYS_SESSION_TOKEN` is set, with
   `SUNDAYKEYS_API_BASE` overriding the recorded production base for a local experiment.
 
-`Sources/SundayKeysApp/AppModel.swift` - the startup wiring, and the consumer this pass added:
+`Sources/SundayKeysApp/AppModel.swift` - the startup wiring and its consumer:
 
 - `init(sessionClient:)` takes the seam and stores it. `nil` is a supported launch: it applies
   `.unknown(noClientReason)` so the window says the licence was not checked.
@@ -118,21 +116,23 @@ already, and every later milestone depends on the gating it exposes.
 `SessionConfiguration.client()` and calls `checkSession()` from `onAppear`, once per launch.
 
 `Sources/SundayKeysApp/LicenceProbe.swift` - the app-level proof below, run by
-`tools/licence_smoke.sh` and by the build workflow. This pass it reports, per mode, the launch
-line, the gate line, and the outcome of a real note request through the model's MIDI transport
+`tools/licence_smoke.sh` and by the build workflow. It reports, per mode, the launch line, the
+gate line, and the outcome of a real note request through the model's MIDI transport
 (`note on ...` or `refused note ...: <gate line>`), and exits 5 on a wrong line, 6 on a wrong gate
 or note outcome, 7 if it cannot build its model, 64 on a bad mode.
 
 `Tests/SundayKeysCoreTests/LicenceSessionTests.swift` - five test classes for the model.
-
 `Tests/SundayKeysCoreTests/SessionClientTests.swift` - the seam and the launch decision, over a
 stub transport.
 
 `Tests/SundayKeysCoreTests/LicenceGateTests.swift` - nine cases for the gate, each derived from
 payload bytes through the real `SessionClient` over a stub transport.
 
-## Rules this implementation chooses (assumptions, replaceable)
+`Sources/SundayKeysCore/Audio/KeysoundVoicing.swift` and
+`Tests/SundayKeysAppTests/LicenceEnforcementTests.swift` - the enforcement cases, described under
+"The guard at the controller, proven by a run" below.
 
+## Rules this implementation chooses (assumptions, replaceable)
 Every one of these is this repository's own decision, not recovered behaviour:
 
 1. `active` is full access with no warning.
@@ -182,11 +182,15 @@ Rules this pass adds, about where the decision is enforced rather than what it d
     verdict and any code path that has not yet applied one cannot withdraw a licence (rule 12).
 20. `launchAllowsPremiumSounds` remains only as a computed read of the gate. There is no stored
     Boolean left to disagree with the decision.
+21. The guard sits on `noteOn` and not on `noteOff`. A refusal that also swallowed releases could
+    strand a voice that was already sounding when the standing changed, and rule 18 says a
+    refusal does not stop what is already running. The run in "The guard at the controller" is
+    what made this explicit: its first version asserted a silent recorder and saw only
+    `["off 60", "off 60"]`.
 
 ## What the tests assert
 
 The model (`LicenceSessionTests.swift`):
-
 - the three raw values, the `grace_period` decode, and the warning vocabulary exactly;
 - camelCase and snake_case session bodies decode every field, including product fields;
 - a missing `license` is `.absent`, not `.expired`;
@@ -236,15 +240,12 @@ transport and asserting `permitsPlayback`, `refusalLine` and `line`:
   because unreachable is not evidence about a licence.
 
 The app's own startup path (`tools/licence_smoke.sh`, run by the build workflow): six launches of
-the bundle, each over a stub transport. The script now asserts the line the window shows
-(`launch:`), the gate the model applied (`gate:`), and the outcome of one note request through
-the model's MIDI transport (`note: note on` for a permitted launch, `note: refused note` for a
-refused one) for `active`, `grace`, `expired`, `absent`, `unreadable` and `failure`. This exists
-because the package has no test target that can import the executable target, so `AppModel`
-cannot be unit-tested directly.
+the bundle, each over a stub transport. The script asserts the line the window shows (`launch:`),
+the gate the model applied (`gate:`), and the outcome of one note request through the model's
+MIDI transport (`note: note on` for a permitted launch, `note: refused note` for a refused one)
+for `active`, `grace`, `expired`, `absent`, `unreadable` and `failure`.
 
 ## Verification - actual runs
-
 Earlier code head `a685a6fafb24833836932288de7118185166efff`: all five workflows push-triggered,
 `status: completed`, every step `success`.
 
@@ -300,9 +301,9 @@ Heads that failed on the way here, and what they showed:
   `standing.licence`.
 - `42905049337`: `swift build --build-tests` failed with `cannot find 'AppModel' in scope` at
   `LicenceProbe.swift:83`, because a multi-blob batch had been mapped to paths in the wrong
-  order and two files landed under each other's names. Repaired in `aff4806f`
-  (`AppModel.swift`) and `b1287e45` (`tools/licence_smoke.sh`), and every later file in this pass
-  was written one path per commit so the mapping cannot be guessed again.
+  order and two files landed under each other's names. Repaired in `aff4806f` (`AppModel.swift`)
+  and `b1287e45` (`tools/licence_smoke.sh`), and every later file in this pass was written one
+  path per commit so the mapping cannot be guessed again.
 
 ### Deltas - transport and startup
 
@@ -330,10 +331,10 @@ state before this pass began, so its result is a read result and not an inferenc
 | session | 42906433799 | `completed`, `success`; release build, bundle, session-resume probe |
 | concurrency | 42906765096 | `completed`, `success`; strict build, flag proof, diagnostics report, MIDI-seam gate |
 
-That head changes no code, so it proves the record, not the behaviour. This pass's code head below
-supersedes it for behaviour, and its own runs are the ones that carry the gate.
+That head changes no code, so it proves the record, not the behaviour. The code heads below
+supersede it for behaviour, and their own runs are the ones that carry the gate.
 
-### This pass - making the gate bind
+### The gate binding at the controller
 
 Code head `d52c1bdf8118e3e85c697ffa2ddf8dd2f4ac9666` (tree `053913fc`). The five workflows were
 dispatched on `main` at that commit and were read to a terminal state from the jobs API:
@@ -346,27 +347,9 @@ dispatched on `main` at that commit and were read to a terminal state from the j
 | session | 42908237915 | `completed`, `success` 21:47:40 | toolchain, Build (release) 21:47:05-33, Bundle 21:47:33-35, session-resume probe 21:47:35-37 |
 | concurrency | 42908256182 | `completed`, `success` 21:47:43 | toolchain, Build with complete concurrency checking 21:47:00-39, flag proof, diagnostics report, MIDI-seam gate |
 
-What those steps mean for this pass:
-
-- `Build (debug, with tests)` compiling on that head is the evidence that `LicenceGate`,
-  `AudioEngineController`'s guard and the `AppModel` rewiring compile together in the app target.
-- `Test` on that head ran the whole suite, including `LicenceGateTests`: nine cases that assert
-  `permitsPlayback`, `refusalLine` and `line` for a permitted launch, a closed grace window, an
-  expired licence, an absent licence, an unreadable status, a 401, a transport failure and a
-  launch with no verdict.
-- `Probe the licence session` ran `tools/licence_smoke.sh` on that head: six bundle launches over
-  stub transports, asserting the `launch:`, `gate:` and `note:` lines for all six modes. The step
-  exited 0, so each assertion in the script held.
-
 The commits on that head, in order, are `da99bcdb` (`LicenceGate`), `38dc3dd4` (the controller
 guard), `2a2532a3` (`AppModel` applies and consults the gate), `f0cf8a0b` (the probe), `1b629102`
 (the smoke script) and `d52c1bdf` (the gate tests).
-
-Three push-triggered runs for those same commits (`42908213313` concurrency, `42908213412`
-concurrency, `42908213532` click) were `cancelled` within seconds of starting, when the dispatch
-runs for the same branch and ref began; the dispatched runs in the table above are the ones read.
-A dispatch that lands `queued` with no runner was not needed this pass: every dispatched run was
-picked up within a minute.
 
 ### The record head `68ad1fd`
 
@@ -385,7 +368,91 @@ state:
 A commit cannot name runs that postdate it, so any later record-only commit is verified the same
 way: five dispatches at that commit, each read to a terminal state before it is called green, and
 its run IDs reported in the session that made it rather than written into the commit before them.
-That is the only category of commit here that is not named by this document.
+
+### The guard at the controller, proven by a run
+
+Code head `27b1318f794cee105c139f3712dffb56e4155a0d` (tree `3e3fd04b`), on top of `72935ad4`.
+
+What changed, and why the seam had to exist first:
+
+- `AudioEngineController` built its `RealtimeKeysoundEngine` itself inside `start()`, so nothing
+  outside the executable target could reach `noteOn` with voices behind it. A test could call
+  `noteOn` and assert the counter, but it could not show that the *permitted* path sounds - and
+  a counter that never once forwarded would have passed such a test too. The controller now takes
+  the voices it should call: `init(voice: (any KeysoundVoicing)? = nil)`, with `noteOn`,
+  `noteOff` and `allNotesOff` reaching `sounding` (`voiceOverride ?? keysound`). The app passes
+  nothing and still gets the graph built on `start()`, so nothing about the shipped launch
+  changed.
+- `KeysoundVoicing` (core) is the wider three-method view; `RealtimeKeysoundEngine` already had
+  all three and conforms by name only. `KeysoundNoteTarget` stays the two-method sink the
+  arpeggiator writes through, which is why no production call site changed.
+- `Tests/SundayKeysAppTests` is a new test target that depends on the executable target, which
+  SwiftPM supports. It is separate from the core suite so a failure says which layer broke.
+- `Tests/SundayKeysAppTests/LicenceEnforcementTests.swift` holds five cases, each deriving its
+  gate from payload bytes through the real `SessionClient` and `SessionLaunch` over a stub
+transport, never a hand-built `LicenceGate`:
+  - an `expired` standing: `noteOn` leaves the recorder untouched, `refusedNotes` is 1 and then
+    2 after a second request, and `licenceGate.line` is
+    `licensed playback refused: Session refused: Licence expired: sounds downgraded`;
+  - an unreadable `{"status":"trialing"}` standing: the refusal line quotes `trialing` and no
+    note reaches the recorder;
+  - the control: an `active` standing still forwards `on 60 v100` with `refusedNotes == 0`, so a
+    refusal cannot be confused with a silent engine;
+  - a launch with no gate applied keeps playback (rule 19);
+  - the arpeggiator: `ArpeggiatorPanel(clock:target: controller)` is enabled, plays `60`, and is
+    stepped twice on a `ManualHostClock`. The panel is stepping and holds `[60]`, the controller
+    counted the refusals, and no step starts a voice - with the control case beside it showing
+    the same commands do sound when permitted.
+
+Rule 21 records the one thing the first run taught: the arpeggiator's releases still reach the
+voices. The guard is on `noteOn`, so the assertion is that no voice is *started*, not that the
+recorder is silent.
+
+First run on the code head, `72935ad` (parent of the fix), run `42910408030`: steps 1-5 and
+`Report warnings` `success`, then `Test` `failure` at 22:01:40 after five seconds. The check-run
+annotations, read from `/check-runs/130159343612/annotations`, name exactly one case:
+
+    LicenceEnforcementTests.swift:153: error: testAnArpeggiatorStepIsRefusedByTheSameGate :
+    XCTAssertEqual failed: ("[\"off 60\", \"off 60\"]") is not equal to ("[]")
+
+The gate had worked: both steps were refused and counted, and the two `off 60` lines are the
+panel's releases. `27b1318f` changed only the assertion (and the comment explaining why), then
+re-dispatched. That head is the one the table below is about.
+
+| workflow | run | job result | steps read |
+| --- | --- | --- | --- |
+| build | 42910942334 | `completed`, `success` | 18/18 steps `success`: toolchain 22:03:43-45, Resolve dependencies 22:03:45-49, Build (debug, with tests) 22:03:49-22:04:17, Report warnings 22:04:17-18, `Report build diagnostics` `skipped`, Test 22:04:18-22:04:23, `Report test diagnostics` `skipped`, Build (release) 22:04:23-48, Bundle 22:04:48-50, Launch 22:04:50-57, audio probe 22:04:57-59, MIDI probe 22:04:59-22:05:02, licence probe 22:05:02-09, bootstrap verification 22:05:09-11, complete 22:05:15 |
+| click | 42910942667 | `completed`, `success` 22:04:26 | toolchain 22:03:42-44, Build (release) 22:03:44-22:04:18, Bundle 22:04:18-19, click probe 22:04:19-24, complete 22:04:26 |
+| patch-transfer | 42910942723 | `completed`, `success` 22:04:38 | toolchain 22:03:50-54, Build (release) 22:03:54-22:04:29, Bundle 22:04:29-31, patch-transfer probe 22:04:31-33, complete 22:04:36 |
+| session | 42910942824 | `completed`, `success` 22:04:37 | toolchain 22:03:45-47, Build (release) 22:03:47-22:04:27, Bundle 22:04:27-29, session-resume probe 22:04:29-33, complete 22:04:35 |
+| concurrency | see below | not read to a terminal state on this head | three dispatches were made; none obtained a runner |
+
+What those steps mean for this pass:
+
+- `Test` on that head ran the whole suite, and the five `SundayKeysAppTests` cases above are part
+  of it. The step ran 22:04:18 to 22:04:23 and passed, so the refusal at the real `noteOn`, the
+  counted refusals, the permitted control and both arpeggiator cases are run-proven rather than
+  read off the code.
+- `Build (debug, with tests)` compiling the new app test target's link step is the evidence that
+  a test target can drive the executable target here (no `Undefined symbols: _main`);
+  `Build (release)` and `Bundle` on the same head show the shipped target is unchanged by the
+  voicing seam.
+- `Probe the licence session` ran `tools/licence_smoke.sh` again and passed, so the nine
+  `LicenceGateTests` and the six-launch probe coexist with the new suite.
+
+Concurrency on this head, stated as it was read and not inferred:
+
+- `42910942164` (dispatch): `queued`/`pending` with an empty job list for over a minute, then
+  cancelled.
+- `42910931084` (push-triggered run for the same commit): a runner was assigned at 22:03:33 and
+  the job reported **no steps at all** for over three minutes - a hung job, not a build. It was
+  cancelled at 22:07.
+- `42911269091`, then `42911573398` (re-dispatches): both stayed `pending` with no job, because
+  the hung job above still held the workflow's slot.
+
+So the concurrency workflow has **no read terminal success on this head**. Nothing here claims
+one: the strict-concurrency build is the last of the five still outstanding, and it is carried in
+"Still not verified" rather than asserted.
 
 ## Still not verified
 
@@ -399,16 +466,21 @@ That is the only category of commit here that is not named by this document.
 - **No live round-trip, in either direction.** The probe's bodies are hand-written from the
   recorded field names; a real server may answer with a shape these readers refuse.
 - **No window has been seen with a licence verdict in it.** The gate is published and asserted,
-  and a refusal now shows up in `lastEvent`, but no view binds `licenceStatus` or `licenceGate`
-  and no window was opened in front of a person: the runs launch the bundle headlessly. Rules 11
-  to 20 are therefore proven as decisions and note outcomes, not as pixels.
-- **A refused note has never been heard or not heard.** No run starts an audio device, so the
-  controller's guard is proven by compilation plus the model-level note outcome in the probe; the
-  `refusedNotes` counter has no run that reads it.
-- **The arpeggiator is covered by construction, not by a run.** It holds `AudioEngineController`
-  as its note target, so its notes must pass the same guard, but no CI step turns the arpeggiator
-  on against a refused gate. That the guard sits on the one voice-starting call is read from the
-  code, not from a green test.
+  and a refusal shows up in `lastEvent`, but no view binds `licenceStatus` or `licenceGate` and no
+  window was opened in front of a person: the runs launch the bundle headlessly. Rules 11 to 21
+  are therefore proven as decisions and note outcomes, not as pixels.
+- **A refused note has been proven unsent, never unheard.** The refusal now has a run behind it at
+  the controller (`Test` on `27b1318f`), and `refusedNotes` is asserted from the same run - but no
+  run starts an audio device, so nothing here says what a speaker does. The stub engine receives
+  nothing on the refused path by assertion, not by listening.
+- **The arpeggiator is proven at the gate, not in the app.** The panel was driven headlessly with
+  a manual clock and asserted through its controller; no run enables the arpeggiator in a built
+  bundle, and no step shows it stepping on screen. What is proven is that its generated note
+  arrives at `AudioEngineController.noteOn` and is refused there.
+- **The concurrency workflow has not been read to a terminal state on the newest head.** Four of
+  the five workflows are read green on `27b1318f`; the strict-concurrency job never got a working
+  runner (see the three run IDs above). The last concurrency success read on any head is
+  `42908970806` at `68ad1fd`.
 - **The probe's own output was not read line by line.** The build job's log download returns a
   truncated head, so the `licence probe:` assertions are evidenced by the step's exit status and
   by the script's `set -o pipefail` and explicit `fail` calls, not by quoted output.
@@ -416,7 +488,6 @@ That is the only category of commit here that is not named by this document.
   notarised app was involved in this pass.
 
 ## Record
-
 `docs/progress.md` is 157 KB and cannot be appended from here in one write; this companion is the
 hand-written record for this milestone, per the practice in the repository skill. The run tables
 above are what belongs in `docs/progress.md` when the append machinery next runs.
