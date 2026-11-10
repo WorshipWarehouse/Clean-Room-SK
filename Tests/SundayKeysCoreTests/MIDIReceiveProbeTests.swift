@@ -73,6 +73,9 @@ final class MIDIReceiveProbeTests: XCTestCase {
                 "MIDI receive probe: sent note off 60 on channel 1",
                 "MIDI receive probe: sent control change 1 = 64 on channel 1",
                 "MIDI receive probe: the app received 3 message(s): 1 note on, 1 note off, 1 control change",
+                "MIDI receive probe: received note on 60 velocity 100 on channel 1",
+                "MIDI receive probe: received note off 60 velocity 64 on channel 1",
+                "MIDI receive probe: received control change 1 = 64 on channel 1",
                 "MIDI receive probe: layer routing sent note 60 to 1 of 2 enabled layer(s)",
                 "MIDI receive probe: outcome: the app parsed every packet: 1 note on, 1 note off, 1 control change",
             ]
