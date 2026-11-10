@@ -94,6 +94,13 @@ public struct MIDIConnectProbe: Equatable, Sendable {
 
     public var report: MIDIStartReport? { verdict.report }
 
+    /// True only when the port accepted the probe's own source, so a caller can
+    /// ask the question without unwrapping the outcome first.
+    public var provesConnectPath: Bool { outcome.provesConnectPath }
+
+    /// The status the probe exits with, which is the outcome's own status.
+    public var exitCode: Int32 { outcome.exitCode }
+
     public var outcome: MIDIConnectProbeOutcome {
         switch (attempt, verdict) {
         case let (_, .refused(failure)):
