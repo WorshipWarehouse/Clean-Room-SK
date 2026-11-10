@@ -61,9 +61,45 @@ straight through with the pressed velocity while the arpeggiator is off; turning
 held releasing the forwarded note and starting the pattern at that exact instant; and the default
 sink reaching an engine-shaped target with `on 60` then `off 60`.
 
+## The runs behind the proof
+
+Every run below was read to a completed run and its conclusion before it was counted. All four are
+on `1c1eba4d401009408afbcd72ac6508f4d6d3ba5c`, the commit that repaired the two caller defects the
+first attempt exposed. Times are UTC, as the API reports them.
+
+- `build` run 42857103692, job 129973021683: started 16:41:43, completed 16:43:05, **success**.
+  Resolve dependencies 16:41:48-16:41:52; Build (debug, with tests) 16:41:52-16:42:19; Test
+  16:42:19-16:42:23; Build (release) 16:42:23-16:42:42; Bundle the app 16:42:42-16:42:44; Launch the
+  app 16:42:44-16:42:51; Probe the audio start 16:42:51-16:42:53; Probe the MIDI start
+  16:42:53-16:42:56; Verify the bootstrap script 16:42:56-16:43:00.
+- `session` run 42857103822, job 129973023382: started 16:41:40, completed 16:42:28, **success**,
+  Probe the session resume 16:42:22-16:42:25.
+- `click` run 42857103988, job 129973022781: started 16:41:41, completed 16:42:31, **success**,
+  Probe the click 16:42:24-16:42:29.
+- `patch_transfer` run 42857650571, job 129974988797: started 16:44:50, completed 16:45:31,
+  **success**, Probe the patch transfer 16:45:27-16:45:29.
+
+The first attempt on `a37c4207` was **not** green and is recorded here rather than hidden: `build`
+run 42856089929 failed in Test at 16:36:45 on exactly two of the thirteen caller cases -
+`testASecondNoteHeldMidRunJoinsAtTheNextStep`, which produced steps 60, 60, 64 where 60, 64, 60 was
+specified, and `testEnablingWithKeysHeldStartsThePatternAtThatInstant`, which produced a note off at
+2.0 with no note on. Both were real defects in the code rather than wrong expectations: the cursor
+was clamped to the length of the pattern at the moment a note joined, and the notes forwarded while
+the arpeggiator was off were released but never handed to the clock. `1c1eba4d` repairs both, and the
+thirteen cases pass unchanged, with `StepClockTests` and `ArpeggiatorTests` unchanged as well.
+
+Two `patch_transfer` dispatches never received a runner, and are recorded rather than glossed: run
+42857103638 was cancelled while still queued and run 42857281037 was superseded by the dispatch that
+did run. The `macos-15` queue carries a standing notice that jobs targeting macOS arm64 runners may
+wait for capacity, so a queued probe was replaced instead of waited on.
+
+This text was added by a commit that **changes documentation only**: no source, test, workflow or
+resource file differs in it.
+
 ## What this does not establish and what is still open
 
 No note was heard. The tests prove scheduling, ordering and the wiring into the note path; they
 cannot prove sound or feel, and no window or audio callback constructs the service yet, so the app
 still plays un-arpeggiated. The original's step rate, subdivision values, gate, latch, swing and
-switch-off behaviour stay **Unknown** until a capture replaces them.
+switch-off behaviour stay **Unknown** until a capture replaces them. Nothing here was validated on
+hardware, through an audio device or against the original application.
