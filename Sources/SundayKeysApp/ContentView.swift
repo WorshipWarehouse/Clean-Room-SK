@@ -320,13 +320,15 @@ struct ControllerSection: View {
                     ControllerRow(target: target, model: model)
                 }
 
+                // Both branches are spelled as Color so the ternary has one type:
+                // mixing a hierarchical style with a colour does not compile.
                 Text(
                     model.learningTarget == nil
                         ? "Each patch keeps its own layout; Save keeps it too."
                         : "Waiting for a control change on any channel."
                 )
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(model.learningTarget == nil ? .secondary : .orange)
+                .foregroundStyle(model.learningTarget == nil ? Color.secondary : Color.orange)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
