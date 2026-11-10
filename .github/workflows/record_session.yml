@@ -22,6 +22,14 @@ jobs:
         with:
           fetch-depth: 0
 
+      # The first attempt at this job rewrote both documents and then died on
+      # 'Author identity unknown': a hosted runner has no git identity of its own. Set it
+      # here rather than inside the recorder, so the recorder keeps doing only its job.
+      - name: Identify the commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
       - name: Record the run
         env:
           GH_TOKEN: ${{ github.token }}
