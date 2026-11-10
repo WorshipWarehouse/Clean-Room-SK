@@ -1,9 +1,10 @@
 name: record session probe
 
-# One shot. Reads the green build run back from the API, writes what it actually did into
-# docs/progress.md and README.md, removes itself, commits, and then starts the build on the
-# documenting commit so the final head is verified as well. A dispatch with a run that did
-# not pass, or whose probe or test step did not pass, exits non-zero and writes nothing.
+# One shot. Reads the green build run and the green session run back from the API, writes
+# what they actually did into docs/progress.md and README.md, removes itself, commits, and
+# then starts the build on the documenting commit so the final head is verified too.
+# A dispatch whose runs did not pass, or whose test or probe step did not pass, exits
+# non-zero and writes nothing.
 on:
   workflow_dispatch:
     inputs:
@@ -29,7 +30,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Record the run
+      - name: Record the runs
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id }}
@@ -59,47 +60,56 @@ jobs:
                   return json.load(response)
 
 
-          run = api(f"/actions/runs/{run_id}")
-          if run.get("conclusion") != "success":
-              sys.exit(f"record: run {run_id} concluded {run.get('conclusion')!r}, nothing written")
-
-          job = api(f"/actions/runs/{run_id}/jobs?filter=all")["jobs"][0]
-          steps = job["steps"]
-
-
           def clock(stamp):
               return stamp[11:19] if stamp else "-"
 
 
-          by_name = {step["name"]: step for step in steps}
-          for required in ("Test", "Probe the session resume"):
-              step = by_name.get(required)
-              if step is None:
-                  sys.exit(f"record: the run has no {required!r} step")
-              if step.get("conclusion") != "success":
-                  sys.exit(f"record: {required!r} concluded {step.get('conclusion')!r}, nothing written")
+          def steps_of(run_id):
+              return api(f"/actions/runs/{run_id}/jobs?filter=all")["jobs"][0]["steps"]
 
-          test = by_name["Test"]
-          probe = by_name["Probe the session resume"]
+
+          def require_step(steps, name, where):
+              for step in steps:
+                  if step["name"] == name:
+                      if step.get("conclusion") != "success":
+                          sys.exit(f"record: {name!r} in {where} concluded {step.get('conclusion')!r}")
+                      return step
+              sys.exit(f"record: {where} has no {name!r} step")
+
+
+          build = api(f"/actions/runs/{run_id}")
+          if build.get("conclusion") != "success":
+              sys.exit(f"record: build run {run_id} concluded {build.get('conclusion')!r}, nothing written")
+          build_steps = steps_of(run_id)
+          test = require_step(build_steps, "Test", "the build run")
+
+          latest = api("/actions/workflows/session.yml/runs?per_page=1")["workflow_runs"]
+          if not latest:
+              sys.exit("record: the session workflow has no runs")
+          session = latest[0]
+          if session.get("conclusion") != "success":
+              sys.exit(f"record: session run {session['id']} concluded {session.get('conclusion')!r}")
+          if session["head_sha"] != build["head_sha"]:
+              sys.exit(f"record: session run {session['id']} is on {session['head_sha'][:7]}, the build on {build['head_sha'][:7]}")
+          session_steps = steps_of(session["id"])
+          probe = require_step(session_steps, "Probe the session resume", "the session run")
+
           test_window = f"{clock(test['started_at'])}-{clock(test['completed_at'])}"
           probe_window = f"{clock(probe['started_at'])}-{clock(probe['completed_at'])}"
-          passed = [step["name"] for step in steps if step.get("conclusion") == "success"]
 
           progress = pathlib.Path("docs/progress.md")
           lines = progress.read_text().splitlines()
 
-          # 1. The phase table gains a row beside the session scope row.
           hits = [index for index, line in enumerate(lines) if line.startswith("| Build, session scope |")]
           if len(hits) != 1:
               sys.exit(f"record: expected one session scope phase row, found {len(hits)}")
           lines.insert(
               hits[0] + 1,
               "| Build, session relaunch | the bundle is started three times against one folder - the write, "
-              f"the relaunch and a hint naming a deleted patch - and each run's own lines are asserted | "
-              f"`tools/session_smoke.sh`, run `{run_id}` |",
+              "the relaunch and a hint naming a deleted patch - and each run's own lines are asserted | "
+              f"`tools/session_smoke.sh`, runs `{run_id}` and `{session['id']}` |",
           )
 
-          # 2. The milestone section explains what the run proved and quotes its timings.
           anchors = [index for index, line in enumerate(lines) if line.strip() == "## Next actions, in order"]
           if len(anchors) != 1:
               sys.exit(f"record: expected one next actions heading, found {len(anchors)}")
@@ -107,34 +117,36 @@ jobs:
               "## Relaunch milestone: a launch that resumes, proven on disk",
               "",
               "The resume was implemented and unit-tested, but no process had ever started the app",
-              "twice against one Application Support folder, so the file the hint is written to had",
-              f"never been read back by a second launch. Run `{run_id}` closes that: `tools/session_smoke.sh`",
-              "starts the bundle three times with one `HOME`, and each run has to print what it did.",
+              "twice against one Application Support folder, so the hint file had never been read",
+              f"back by a second launch. Runs `{run_id}` and `{session['id']}` close that:",
+              "`tools/session_smoke.sh` starts the bundle three times with one `HOME`, and each run",
+              "has to print what it did.",
               "",
               "- **The write run** saves a bank of three patches and a hint naming the third, then",
-              "  prints the paths it used, so the step reports which folder the launch read.",
+              "  prints the folder it used, so the step reports which files the launch read.",
               "- **The relaunch** is a second process: `SessionProbe` constructs the same `AppModel` the",
-              "  window constructs, so `loadBank`, `SessionScope.restore` and the play head alignment",
-              "  run over the files the first process left. It prints the status line, the selected",
-              "  patch and the head's position; the script requires `Resumed Rehearsal Pad, 3 patches",
-              "  and 3 set list slots` and `play head on slot 3 of 3`.",
+              "  window constructs, so `loadBank`, `SessionScope.restore` and the head alignment run over",
+              "  the files the first process left. It prints the status line, the selected patch and the",
+              "  head's position, and the script requires `Resumed Rehearsal Pad, 3 patches and 3 set",
+              "  list slots` and `play head on slot 3 of 3`.",
               "- **The missing-patch run** writes a hint naming a patch the bank does not have, and the",
               "  launch has to print `Opened Sunday Keys: the patch from the last launch is gone` and",
               "  stand on slot 1, so the fallback is a sentence and a position rather than a branch.",
-              "- **The probe decides nothing.** It reports, and exits non-zero when the report does not",
-              "  match; the script asserts the printed lines as well, so a green step and a green exit",
-              "  status say the same thing.",
+              "- **The probe decides nothing.** It reports, and its exit status is a comparison of that",
+              "  report against the expected value; the script asserts the printed lines too.",
               "",
-              f"Steps read from that job: the Swift suite ran {test_window} and the probe step ran",
-              f"{probe_window}, and {len(passed)} of {len(steps)} steps concluded success.",
+              f"The build run is green with the Swift suite at {test_window}, and the session run is",
+              f"green with the probe at {probe_window}. The probe had to become its own workflow: the",
+              "build workflow's token may delete a file under `.github/workflows` but may not create or",
+              "update one, so adding the step there was rejected by the remote with `refusing to allow a",
+              "GitHub App to create or update workflow`. That refusal is in run",
+              "`42821552394` for anyone who wants to see it.",
               "",
               "What this does not prove: that a person sees the window open on the remembered patch.",
-              "The probe proves the state the window is built from, on a machine with no display, and",
-              "no screenshot exists.",
+              "The probe proves the state the window is built from, on a machine with no display.",
               "",
           ]
 
-          # 3. The next actions item that asked for this stops asking for it.
           start = [index for index, line in enumerate(lines) if line.startswith("4. **A launch that resumes.**")]
           if len(start) != 1:
               sys.exit(f"record: expected one relaunch next action, found {len(start)}")
@@ -145,14 +157,13 @@ jobs:
               sys.exit("record: the relaunch next action did not look like a wrapped paragraph")
           lines[start[0]:end] = [
               "4. **A relaunch on a real Mac.** The on-disk resume runs in CI now: run",
-              f"   `{run_id}` started the app three times against one folder, and the second launch",
+              f"   `{session['id']}` started the app three times against one folder, and the second launch",
               "   printed the resumed patch with the play head on its slot. What is still missing is a",
               "   person watching the window open on that patch, which needs the unreachable Mac.",
           ]
 
           progress.write_text("\n".join(lines) + "\n")
 
-          # 4. The README status table gains the same fact, in one row.
           readme = pathlib.Path("README.md")
           rows = readme.read_text().splitlines()
           hits = [index for index, line in enumerate(rows) if line.startswith("| session resumed on launch |")]
@@ -161,14 +172,14 @@ jobs:
           rows.insert(
               hits[0] + 1,
               "| relaunch proven on disk | "
-              f"run `{run_id}` starts the bundle three times against one folder: one writes a bank and "
-              "remembers the third patch, the next launch prints the resumed patch with the play head on "
-              "its slot, and a hint naming a deleted patch falls back with its reason |",
+              f"run `{session['id']}` starts the bundle three times against one folder: one writes a bank "
+              "and remembers the third patch, the next launch prints the resumed patch with the play head "
+              "on its slot, and a hint naming a deleted patch falls back with its reason |",
           )
           readme.write_text("\n".join(rows) + "\n")
 
-          print(f"record: run {run_id} written into docs/progress.md and README.md")
-          print(f"record: tests {test_window}, probe {probe_window}")
+          print(f"record: build {run_id} tests {test_window}, session {session['id']} probe {probe_window}")
+          print("record: docs/progress.md and README.md written")
           PY
 
       - name: Remove this job
@@ -178,7 +189,7 @@ jobs:
         run: |
           set -o pipefail
           git add -A
-          git commit -m "Record the relaunch milestone and the run that proved it [skip ci]"
+          git commit -m "Record the relaunch milestone and the runs that proved it [skip ci]"
           git push
           git show --stat --oneline HEAD
 

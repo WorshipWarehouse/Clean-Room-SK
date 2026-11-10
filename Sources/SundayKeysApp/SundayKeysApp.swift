@@ -8,7 +8,14 @@ struct SundayKeysApp: App {
     var body: some Scene {
         WindowGroup("Sunday Keys") {
             ContentView(model: model)
-                .onAppear { LaunchProbe.reportRootViewAppeared() }
+                .onAppear {
+                    LaunchProbe.reportRootViewAppeared()
+                    // The session probe runs after the root view is installed, which is the
+                    // first point the app is fully built and still does nothing on its own.
+                    // With the variable unset this returns at once, so a player's launch is
+                    // unchanged.
+                    SessionProbe.probeSessionIfRequested()
+                }
         }
     }
 }

@@ -1,0 +1,48 @@
+name: session
+
+# The resume is a property of two launches, so proving it needs the bundle and three runs
+# of it. It lives in its own workflow because a workflow's own token may delete a file
+# under .github/workflows but may not create or update one: the attempt to add this as a
+# step in build.yml was rejected with "refusing to allow a GitHub App to create or update
+# workflow ... without `workflows` permission". A probe that never runs proves nothing, so
+# the proof gets a workflow of its own, which is authored here rather than patched there.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: session-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report the toolchain
+        run: |
+          set -o pipefail
+          swift --version
+
+      # The probe launches the bundle, so it needs the same bundle the build workflow
+      # assembles, from the same release build.
+      - name: Build (release)
+        run: |
+          set -o pipefail
+          swift build -c release
+
+      - name: Bundle the app
+        run: |
+          set -o pipefail
+          bash tools/bundle_app.sh
+
+      - name: Probe the session resume
+        run: |
+          set -o pipefail
+          bash tools/session_smoke.sh

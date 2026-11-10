@@ -100,11 +100,13 @@ enum SessionProbe {
     /// that decision, so what is asserted is what a player's launch does.
     private static func relaunch(expectingResume: Bool) {
         let model = AppModel()
-        let head = model.setlist.currentIndex + 1
+        // A bank with no slots has no head at all, which is why the index is optional; the
+        // probe reports slot 0 rather than inventing one.
+        let slot = (model.setlist.currentIndex ?? -1) + 1
 
         report("status: \(model.bankStatus)")
         report("selected: \(model.patch.name)")
-        report("play head on slot \(head) of \(model.setlist.entries.count)")
+        report("play head on slot \(slot) of \(model.setlist.entries.count)")
 
         if expectingResume {
             guard model.patch.name == rememberedName else {
@@ -123,8 +125,8 @@ enum SessionProbe {
             report("the fallback line was not the missing-patch one")
             exit(7)
         }
-        guard head == 1 else {
-            report("the fallback left the play head on slot \(head)")
+        guard slot == 1 else {
+            report("the fallback left the play head on slot \(slot)")
             exit(8)
         }
         report("fell back to slot 1 and said why")
