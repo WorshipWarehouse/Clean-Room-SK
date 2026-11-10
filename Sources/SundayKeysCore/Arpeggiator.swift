@@ -38,16 +38,24 @@ public struct SplitMix64: RandomNumberGenerator, Sendable {
 
 /// Turns the notes a player is holding into one step of a pattern at a time.
 ///
-/// The pattern is a pure function of the held notes and the style, so the same holds
-/// always produce the same steps. Notes are kept deduplicated and in ascending pitch
-/// order, because every style below is defined over that order. An empty pattern
-/// produces no notes and does not advance, and a released note never leaves the
-/// cursor pointing past the end of a shorter pattern.
+/// The pattern is a pure function of the held notes, the style and the octave span,
+/// so the same holds always produce the same steps. Notes are kept deduplicated and
+/// in ascending pitch order, because every style below is defined over that order. An
+/// empty pattern produces no notes and does not advance, and a released note never
+/// leaves the cursor pointing past the end of a shorter pattern.
+///
+/// The octave span is this repository's own rule. The analysis records no octave
+/// behaviour for the original, so one to four octaves ascending from the lowest held
+/// note is a choice that can be asserted, not a reproduction: each held note is
+/// repeated twelve semitones higher for every extra octave, and a note that would be
+/// pushed past 127 is left out rather than wrapped down onto a lower pitch.
 ///
 /// This type makes no sound and knows nothing about tempo: it answers "which notes
 /// sound on the next step", and a caller that owns a clock asks it once per step.
 public struct Arpeggiator: Sendable {
     public private(set) var style: ArpeggiatorStyle
+    /// How many octaves the cycle spans, from one to four.
+    public private(set) var octaves: Int
     private var heldNotes: Set<UInt8>
     /// Steps taken, not an index into the current pattern.
     ///
@@ -58,14 +66,20 @@ public struct Arpeggiator: Sendable {
     private var cursor: Int
     private var generator: SplitMix64
 
-    public init(style: ArpeggiatorStyle = .up, seed: UInt64 = 0x5EED_1234) {
+    public init(
+        style: ArpeggiatorStyle = .up,
+        octaves: Int = 1,
+        seed: UInt64 = 0x5EED_1234
+    ) {
         self.style = style
+        self.octaves = min(max(octaves, 1), 4)
         self.heldNotes = []
         self.cursor = 0
         self.generator = SplitMix64(seed: seed)
     }
 
-    /// The held notes, ascending and deduplicated. This is the order every style uses.
+    /// The held notes, ascending and deduplicated. This is the order every style uses,
+    /// before the octave span repeats it.
     public var held: [UInt8] {
         heldNotes.sorted()
     }
@@ -78,6 +92,15 @@ public struct Arpeggiator: Sendable {
     /// cursor counted in one ordering means nothing in another.
     public mutating func setStyle(_ style: ArpeggiatorStyle) {
         self.style = style
+        cursor = 0
+    }
+
+    /// Changes how many octaves the cycle spans, for the same reason a style change
+    /// restarts it: a cursor counted over one cycle means nothing in another. A span
+    /// outside one to four is clamped rather than rejected, so a stepper cannot leave
+    /// the pattern in a state it cannot walk.
+    public mutating func setOctaves(_ octaves: Int) {
+        self.octaves = min(max(octaves, 1), 4)
         cursor = 0
     }
 
@@ -107,11 +130,11 @@ public struct Arpeggiator: Sendable {
 
     /// The notes that sound on the next step, in the order they should sound.
     ///
-    /// `chord` sounds every held note at once; `random` picks one; the other four
+    /// `chord` sounds every note of the span at once; `random` picks one; the other four
     /// walk a cycle and wrap at its end. An empty pattern returns no notes and
     /// leaves the cursor at the start.
     public mutating func advance() -> [UInt8] {
-        let notes = heldNotes.sorted()
+        let notes = spannedNotes()
         guard !notes.isEmpty else {
             cursor = 0
             return []
@@ -129,6 +152,28 @@ public struct Arpeggiator: Sendable {
             cursor += 1
             return [note]
         }
+    }
+
+    /// The held notes repeated up the chosen number of octaves, ascending.
+    ///
+    /// One octave is the held notes themselves, so a span of one is the behaviour
+    /// every earlier case was written against. A transposed note above 127 is left
+    /// out rather than wrapped, because wrapping would sound a pitch far below the
+    /// key the player is holding.
+    private func spannedNotes() -> [UInt8] {
+        let notes = heldNotes.sorted()
+        guard octaves > 1 else { return notes }
+
+        var spanned: [UInt8] = []
+        for octave in 0..<octaves {
+            for note in notes {
+                let shifted = Int(note) + 12 * octave
+                if shifted <= 127 {
+                    spanned.append(UInt8(shifted))
+                }
+            }
+        }
+        return spanned
     }
 
     /// The order one full cycle visits, ending just before it would repeat its first

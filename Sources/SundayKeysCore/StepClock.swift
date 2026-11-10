@@ -110,11 +110,12 @@ public final class StepClock {
         clock: HostClock,
         sink: NoteEventSink,
         style: ArpeggiatorStyle = .up,
+        octaves: Int = 1,
         settings: StepClockSettings = StepClockSettings()
     ) {
         self.clock = clock
         self.sink = sink
-        self.arpeggiator = Arpeggiator(style: style)
+        self.arpeggiator = Arpeggiator(style: style, octaves: octaves)
         self.settings = settings
         if settings.isRunning {
             self.nextStepTime = clock.now
@@ -124,6 +125,8 @@ public final class StepClock {
     public var currentSettings: StepClockSettings { settings }
     public var heldNotes: [UInt8] { arpeggiator.held }
     public var isRunning: Bool { settings.isRunning }
+    /// How many octaves the pattern spans, as the pattern holds it.
+    public var octaves: Int { arpeggiator.octaves }
 
     /// Starts holding a note. A note that arrives mid-phrase joins the pattern on the next step;
     /// a note that arrives into an idle clock sounds on the tick that sees it.
@@ -147,6 +150,14 @@ public final class StepClock {
 
     public func setStyle(_ style: ArpeggiatorStyle) {
         arpeggiator.setStyle(style)
+    }
+
+    /// Changes how many octaves the cycle spans. It takes effect on the next step,
+    /// because the pattern restarts from its first step: a cursor counted over one
+    /// cycle means nothing in another. The span is clamped to one to four by the
+    /// pattern itself.
+    public func setOctaves(_ octaves: Int) {
+        arpeggiator.setOctaves(octaves)
     }
 
     /// Publishes new settings. Starting anchors the grid at the given time; stopping clears it.

@@ -20,15 +20,17 @@ final class AppModel: ObservableObject {
 
     /// The arpeggiator's panel state. The panel is the one object the section's
     /// controls reach; these mirrors are what make a toggle redraw the window, so
-    /// the section never shows state the service does not hold. Latch lives in
-    /// that same panel, which is why the toggle and the status line cannot
-    /// disagree.
+    /// the section never shows state the service does not hold. Latch, the pattern
+    /// and the octave span live in that same panel, which is why a control and the
+    /// status line cannot disagree.
     @Published private(set) var arpeggiatorEnabled = false
     @Published private(set) var arpeggiatorLatched = false
+    @Published private(set) var arpeggiatorPattern = ArpeggiatorStyle.up
+    @Published private(set) var arpeggiatorOctaves = 1
     @Published private(set) var arpeggiatorBeatsPerMinute = 120.0
     @Published private(set) var arpeggiatorDivision = StepDivision.eighth
     @Published private(set) var arpeggiatorStatus =
-        "Arp off, latch off, 120 bpm, eighth"
+        "Arp off, latch off, Up, 1 octave, 120 bpm, eighth"
 
     /// What the MIDI client currently knows, updated on every start and on every
     /// refresh, so a source appearing or disappearing is reflected without
@@ -404,6 +406,21 @@ final class AppModel: ObservableObject {
         publishArpeggiator()
     }
 
+    /// The pattern picker's setter. It reaches the panel exactly as the latch does,
+    /// and the service restarts its cycle on the next step, so a pattern changed
+    /// mid-run is heard on the step after the change rather than at once.
+    func setArpeggiatorPattern(_ pattern: ArpeggiatorStyle) {
+        arpeggiator.setPattern(pattern)
+        publishArpeggiator()
+    }
+
+    /// The octave span's setter. The panel clamps to one to four through the
+    /// service, so a stepper cannot put the cycle outside the range it can walk.
+    func setArpeggiatorOctaves(_ octaves: Int) {
+        arpeggiator.setOctaves(octaves)
+        publishArpeggiator()
+    }
+
     func setArpeggiatorBeatsPerMinute(_ value: Double) {
         arpeggiator.setBeatsPerMinute(value)
         publishArpeggiator()
@@ -420,6 +437,8 @@ final class AppModel: ObservableObject {
     private func publishArpeggiator() {
         arpeggiatorEnabled = arpeggiator.isEnabled
         arpeggiatorLatched = arpeggiator.isLatched
+        arpeggiatorPattern = arpeggiator.pattern
+        arpeggiatorOctaves = arpeggiator.octaves
         arpeggiatorBeatsPerMinute = arpeggiator.beatsPerMinute
         arpeggiatorDivision = arpeggiator.division
         arpeggiatorStatus = arpeggiator.statusLine
@@ -466,7 +485,7 @@ final class AppModel: ObservableObject {
 
     func saveBank() {
         do {
-        rememberSelection()
+            rememberSelection()
             try store.save(bank)
             bankStatus = "Saved \(bank.patches.count) patch\(bank.patches.count == 1 ? "" : "es") and \(bank.setlist.entries.count) set list slot\(bank.setlist.entries.count == 1 ? "" : "s")"
         } catch {

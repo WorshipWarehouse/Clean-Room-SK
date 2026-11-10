@@ -61,8 +61,14 @@ public final class KeysoundNoteSink: NoteEventSink {
 /// sounding. A key pressed while another is still down joins the running
 /// pattern instead. Latch does nothing while the arpeggiator is off,
 /// where keys pass straight through.
+///
+/// The octave span is ours too, and the analysis records no octave
+/// behaviour at all, so one to four octaves is a choice rather than a
+/// reproduction. The cycle restarts when the span changes, for the same
+/// reason it restarts when the style does.
 public final class ArpeggiatorService {
     public private(set) var style: ArpeggiatorStyle
+    public private(set) var octaves: Int
     public private(set) var isEnabled: Bool
     public private(set) var isLatched: Bool
     public private(set) var beatsPerMinute: Double
@@ -87,6 +93,7 @@ public final class ArpeggiatorService {
         target: KeysoundNoteTarget,
         sink: NoteEventSink? = nil,
         style: ArpeggiatorStyle = .up,
+        octaves: Int = 1,
         isEnabled: Bool = false,
         isLatched: Bool = false,
         beatsPerMinute: Double = 120,
@@ -104,9 +111,11 @@ public final class ArpeggiatorService {
             velocity: velocity,
             channel: channel
         )
+        let span = min(max(octaves, 1), 4)
 
         self.sink = noteSink
         self.style = style
+        self.octaves = span
         self.isEnabled = isEnabled
         self.isLatched = isLatched
         self.beatsPerMinute = settings.beatsPerMinute
@@ -118,12 +127,14 @@ public final class ArpeggiatorService {
             clock: clock,
             sink: noteSink,
             style: style,
+            octaves: span,
             settings: settings
         )
     }
 
     /// The notes the pattern plays, ascending and deduplicated. With latch
-    /// on these stay after the keys that started them come up.
+    /// on these stay after the keys that started them come up. This is the
+    /// keys the player holds, before the octave span repeats them.
     public var heldNotes: [UInt8] { held.sorted() }
 
     /// True while the pattern is running, which it is only with the
@@ -261,6 +272,15 @@ public final class ArpeggiatorService {
     public func setStyle(_ style: ArpeggiatorStyle) {
         self.style = style
         stepClock.setStyle(style)
+    }
+
+    /// The octave span takes effect on the next step, for the same reason a
+    /// style change does: the cycle restarts from its first step. The span
+    /// is clamped to one to four, so a stepper cannot leave the pattern in
+    /// a state it cannot walk.
+    public func setOctaves(_ value: Int) {
+        octaves = min(max(value, 1), 4)
+        stepClock.setOctaves(octaves)
     }
 
     /// A tempo change lands after the step already scheduled.

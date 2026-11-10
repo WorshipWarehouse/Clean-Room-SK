@@ -10,10 +10,10 @@ extension AudioEngineController: KeysoundNoteTarget {}
 /// The arpeggiator panel section.
 ///
 /// Every control here goes through `AppModel` to the one `ArpeggiatorPanel` the
-/// model owns, so the toggle in the window and the state the service holds are
-/// the same value. Latch sits beside on, tempo and division because those are
-/// the controls that decide what the pattern does, and every one of them takes
-/// the same path.
+/// model owns, so the picker in the window and the state the service holds are
+/// the same value. Latch, the pattern and the octave span sit beside on, tempo
+/// and division because those are the controls that decide what the pattern
+/// does, and every one of them takes the same path.
 ///
 /// The analysis records the original's panel as **Unknown**, so the labels are
 /// this repository's own words rather than a copy of another layout, and the
@@ -48,6 +48,40 @@ struct ArpeggiatorSection: View {
                             + "starts a new chord."
                     )
 
+                    Picker(
+                        "Pattern",
+                        selection: Binding(
+                            get: { model.arpeggiatorPattern },
+                            set: { model.setArpeggiatorPattern($0) }
+                        )
+                    ) {
+                        ForEach(ArpeggiatorPanel.patternChoices, id: \.self) { pattern in
+                            Text(ArpeggiatorPanel.label(for: pattern))
+                                .tag(pattern)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(width: 100)
+                    .help(
+                        "Up walks the chord upward, Down downward, "
+                            + "UpDown turns at the top and the bottom."
+                    )
+
+                    Stepper(
+                        value: Binding(
+                            get: { model.arpeggiatorOctaves },
+                            set: { model.setArpeggiatorOctaves($0) }
+                        ),
+                        in: 1...4
+                    ) {
+                        Text(octavesText)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                    .help(
+                        "How many octaves the pattern spans, "
+                            + "counted up from the lowest key you hold."
+                    )
+
                     Stepper(
                         value: Binding(
                             get: { model.arpeggiatorBeatsPerMinute },
@@ -73,7 +107,7 @@ struct ArpeggiatorSection: View {
                         }
                     }
                     .labelsHidden()
-                    .frame(width: 170)
+                    .frame(width: 150)
 
                     Spacer()
                 }
@@ -83,9 +117,9 @@ struct ArpeggiatorSection: View {
                     .foregroundStyle(.secondary)
 
                 Text(
-                    "Latch is this instrument's own rule; "
-                        + "the original's stepping stays Unknown "
-                        + "until a capture."
+                    "Latch, the pattern and the octave span are this "
+                        + "instrument's own rules; the original's stepping "
+                        + "stays Unknown until a capture."
                 )
                 .font(.system(.caption2, design: .monospaced))
                 .foregroundStyle(.secondary)
@@ -97,5 +131,11 @@ struct ArpeggiatorSection: View {
 
     private var bpmText: String {
         String(Int(model.arpeggiatorBeatsPerMinute.rounded()))
+    }
+
+    private var octavesText: String {
+        model.arpeggiatorOctaves == 1
+            ? "1 octave"
+            : "\(model.arpeggiatorOctaves) octaves"
     }
 }

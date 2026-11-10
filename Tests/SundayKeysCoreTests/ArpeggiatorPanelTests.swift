@@ -29,10 +29,10 @@ private final class SilentTarget: KeysoundNoteTarget {
 /// The panel layer the window binds to, driven by a virtual clock.
 ///
 /// The section's controls reach the service only through `ArpeggiatorPanel`, so
-/// these cases are what a press of the latch toggle actually does: the panel's
-/// state and the service's agree, a toggle lands at the instant the clock says,
-/// and the latch behaviour the service suite pins is unchanged when the same
-/// calls arrive through the panel.
+/// these cases are what a press of a control actually does: the panel's state
+/// and the service's agree, a change lands at the instant the clock says, and
+/// the pattern, octave and latch behaviour the service suite pins is unchanged
+/// when the same calls arrive through the panel.
 ///
 /// Every instant is on the default grid: 120 bpm, `.eighth`, so a step every
 /// 0.25 s and a note off 0.125 s after its note on.
@@ -53,14 +53,30 @@ final class ArpeggiatorPanelTests: XCTestCase {
         return (clock, sink, ArpeggiatorPanel(service: service, clock: clock))
     }
 
+    private func step(
+        _ clock: ManualHostClock,
+        _ panel: ArpeggiatorPanel,
+        _ times: [TimeInterval]
+    ) {
+        for time in times {
+            clock.now = time
+            panel.tick()
+        }
+    }
+
     func testThePanelStartsOffOnTheDefaultGrid() {
         let (_, _, panel) = makePanel(enabled: false)
 
         XCTAssertFalse(panel.isEnabled)
         XCTAssertFalse(panel.isLatched)
+        XCTAssertEqual(panel.pattern, .up)
+        XCTAssertEqual(panel.octaves, 1)
         XCTAssertEqual(panel.beatsPerMinute, 120)
         XCTAssertEqual(panel.division, .eighth)
-        XCTAssertEqual(panel.statusLine, "Arp off, latch off, 120 bpm, eighth")
+        XCTAssertEqual(
+            panel.statusLine,
+            "Arp off, latch off, Up, 1 octave, 120 bpm, eighth"
+        )
     }
 
     func testTheLatchToggleChangesTheServiceStateBothWays() {
@@ -77,6 +93,59 @@ final class ArpeggiatorPanelTests: XCTestCase {
         XCTAssertFalse(panel.isLatched)
         XCTAssertFalse(panel.service.isLatched)
         XCTAssertEqual(panel.latchLabel, "Latch off")
+    }
+
+    func testThePatternAndOctaveControlsReachTheService() {
+        let (_, _, panel) = makePanel()
+
+        panel.setPattern(.down)
+        panel.setOctaves(3)
+
+        XCTAssertEqual(panel.pattern, .down)
+        XCTAssertEqual(panel.service.style, .down)
+        XCTAssertEqual(panel.patternLabel, "Down")
+        XCTAssertEqual(panel.octaves, 3)
+        XCTAssertEqual(panel.service.octaves, 3)
+        XCTAssertEqual(panel.octavesLabel, "3 octaves")
+        XCTAssertEqual(
+            panel.statusLine,
+            "Arp on, latch off, Down, 3 octaves, 120 bpm, eighth"
+        )
+    }
+
+    func testTheOctaveControlIsClampedToOneToFour() {
+        let (_, _, panel) = makePanel()
+
+        panel.setOctaves(9)
+        XCTAssertEqual(panel.octaves, 4)
+        XCTAssertEqual(panel.octavesLabel, "4 octaves")
+
+        panel.setOctaves(0)
+        XCTAssertEqual(panel.octaves, 1)
+        XCTAssertEqual(panel.octavesLabel, "1 octave")
+    }
+
+    func testAPatternAndSpanChosenThroughThePanelChangeWhatSounds() {
+        let (clock, sink, panel) = makePanel()
+
+        clock.now = 0
+        panel.keyDown(note: 60, velocity: 100)
+        panel.keyDown(note: 64, velocity: 100)
+        panel.keyDown(note: 67, velocity: 100)
+
+        panel.setPattern(.upDown)
+        panel.setOctaves(2)
+
+        step(clock, panel, [0, 0.25, 0.5, 0.75])
+
+        // Two octaves of 60, 64, 67 walked up turn at 79, so the fourth step is
+        // 72 rather than an immediate return to 60.
+        XCTAssertEqual(sink.noteOns, [
+            "0.0 on 60 v100",
+            "0.25 on 64 v100",
+            "0.5 on 67 v100",
+            "0.75 on 72 v100",
+        ])
     }
 
     func testALatchedPatternThroughThePanelKeepsRunningAfterTheKeyComesUp() {
@@ -171,7 +240,7 @@ final class ArpeggiatorPanelTests: XCTestCase {
         XCTAssertEqual(panel.divisionLabel, "sixteenth")
         XCTAssertEqual(
             panel.statusLine,
-            "Arp on, latch off, "
+            "Arp on, latch off, Up, 1 octave, "
                 + "\(Int(MetronomeSettings.clampTempo(5000).rounded())) bpm, "
                 + "sixteenth"
         )
