@@ -9,9 +9,9 @@ asset was copied into `Sources/` or `Tests/`.
 
 The queued decompilation targets (`Audio.KeyboardVelocityScaling`, `Audio.LayerRangeLimit`,
 Realm MIDI-learn tables, `Audio.SamplerPlugin`, the rotor/chorus/delay ranges) all need the
-analysis host, which is still unreachable: see `docs/re/access-determination.md`. M1 is the one
-milestone the plan marks as ready, because its model is fully reconstructed already, and every
-later milestone depends on the gating it exposes.
+analysis host, which is still unreachable: see `docs/re/access-determination.md`.
+M1 is the one milestone the plan marks as ready, because its model is fully reconstructed
+already, and every later milestone depends on the gating it exposes.
 
 ## Evidence used, and what it fixes
 
@@ -46,12 +46,12 @@ later milestone depends on the gating it exposes.
 - `SessionPayload`, `UserRole`, `AccessibleProduct`, `SessionEntitlements`, `SessionStanding`.
 - `SessionDocument.decode`, which reads the `{data}` / `{error}` envelope and accepts both key
   spellings, because the key strategy is Unknown.
-- `SessionGate.standing(for:at:)`, the session-level rule. It is not called `SessionScope`
+- `SessionGate.standing(for:at:)`, the session-level rule. It is not called `SessionScope`,
   because that name already means "which patch a launch opens" in `SessionMemory.swift`; the
   first CI run caught that redeclaration and the type was renamed rather than the existing one.
 - `SessionEntitlements.backupAllowed(existingBackups:)` and `audioOutputAllowed(index:)`.
 
-`Sources/SundayKeysCore/Session/SessionClient.swift` - the seam, added in the second pass:
+`Sources/SundayKeysCore/Session/SessionClient.swift` - the seam:
 
 - `SessionTransport`: one async method, `send(SessionRequest) async throws -> SessionResponse`.
   Foundation's URL loading is not imported by the core target, so the seam is the only thing a
@@ -69,8 +69,9 @@ later milestone depends on the gating it exposes.
 
 - `SessionLaunch` (`licensed`, `grace`, `refused`, `unlicensed`, `unknown(reason)`), resolved
   from an outcome, with `allowsPremiumSounds`, `refusesLicensedSession`, `standing` and one
-  `line` the window can show. `unknownPrefix` is the fixed phrase every no-verdict line starts
-  with, so a reader cannot mistake a failed check for a verdict.
+  `line` the window can show.
+- `unknownPrefix` is the fixed phrase every no-verdict line starts with, so a reader cannot
+  mistake a failed check for a verdict.
 
 `Sources/SundayKeysApp/SessionTransport.swift` - the production side of the seam:
 
@@ -80,7 +81,7 @@ later milestone depends on the gating it exposes.
 
 `Sources/SundayKeysApp/AppModel.swift` - the startup wiring:
 
-- `init(sessionClient:)` takes the seam, and stores it. `nil` is a supported launch: it applies
+- `init(sessionClient:)` takes the seam and stores it. `nil` is a supported launch: it applies
   `.unknown(noClientReason)` so the window says the licence was not checked.
 - `checkSession(at:)` is the startup read: one await, one `SessionLaunch.resolve`, one `apply`.
 - `apply(_:)` is the only writer of `licenceStatus`, `launchAllowsPremiumSounds` and `launch`,
@@ -93,6 +94,7 @@ later milestone depends on the gating it exposes.
 `tools/licence_smoke.sh` and by the build workflow.
 
 `Tests/SundayKeysCoreTests/LicenceSessionTests.swift` - five test classes for the model.
+
 `Tests/SundayKeysCoreTests/SessionClientTests.swift` - the seam and the launch decision, over a
 stub transport.
 
@@ -202,10 +204,55 @@ ones that prove the renamed code.
 
 ### This pass - the seam, the wiring and the six launch branches
 
-This head adds `SessionClient`, `SessionLaunch`, `URLSessionSessionTransport`,
-`SessionConfiguration`, `AppModel.checkSession`, the licence probe and the workflow step that
-runs it. Its five runs and their step outcomes are recorded in the table added by the docs commit
-that closes this pass; that commit touches only this file, so the code under test is identical.
+Code head `43c04a0615ee96f25995177b75ddcae23d97a985` (tree `70b9a6bf`), all five workflows
+push-triggered, `status: completed`, every step `success`:
+
+| workflow | run | steps read (all `success`) |
+| --- | --- | --- |
+| build | 42905937031 | 18/18: toolchain, Resolve dependencies (`No external dependencies found`), Build (debug, with tests) 21:32:06-21:32:32, Test 21:32:33-21:32:37, Build (release) 21:32:37-21:33:03, Bundle, Launch, audio probe, MIDI probe, licence probe 21:33:21-21:33:29, bootstrap verification 21:33:29-21:33:32 |
+| click | 42905936601 | release build, bundle, click probe 21:32:37-21:32:42 |
+| patch-transfer | 42905936600 | release build 21:32:08-21:32:41, bundle, patch-transfer probe 21:32:43-21:32:45 |
+| session | 42905936712 | release build, bundle, session-resume probe 21:32:42-21:32:44 |
+| concurrency | 42905937145 | strict build with complete concurrency checking, flag proof, diagnostics report, MIDI-seam gate 21:32:02-21:32:45 |
+
+On that head the `Test` step ran the full suite including the six branches this milestone is
+about, and the `Probe the licence session` step ran `tools/licence_smoke.sh`: six bundle launches
+against stub bodies, each exiting 0 after its assertion held. The step conclusions and timings
+above were read from the runs themselves; the build job's log download is truncated to its head
+by the API, so the probe's printed `licence probe:` lines were not read verbatim - only that the
+step passed.
+
+Heads that failed on the way here, and what they showed:
+
+- `b1287e45` (build run `42905651990`): debug build with tests succeeded at 21:31:18, then `Test`
+  failed at 21:31:23 on exactly one assertion. `testGraceWhoseEndHasPassedIsNotFullAccess`
+  expected the line `Session refused: Grace period ended: sounds downgraded` and premium
+  withheld; it got `Grace period ended: sounds downgraded` with premium allowed. Root cause:
+  `SessionLaunch.resolve` branched on the licence *status* alone, so rule 3 lived in
+  `LicenceScope` but was dropped by the launch. Fixed in `43c04a06`: a `grace_period` now
+  resolves on `standing.access`, and the `.licensed` / `.grace` permission is read from the
+  standing rather than assumed, so a status and an access cannot disagree.
+- `19615f6e` and `2db2a1de` (session run `42904726895`): `SessionLaunch.swift:34/38/40/42` refused
+  to convert `SessionStanding` to `LicenceStanding`; fixed by resolving the launch on
+  `standing.licence`.
+- `42905049337`: `swift build --build-tests` failed with `cannot find 'AppModel' in scope` at
+  `LicenceProbe.swift:83`, because a multi-blob batch had been mapped to paths in the wrong
+  order and two files landed under each other's names. Repaired in `aff4806f`
+  (`AppModel.swift`) and `b1287e45` (`tools/licence_smoke.sh`), and every later file in this pass
+  was written one path per commit so the mapping cannot be guessed again.
+
+### Deltas this pass - transport and startup
+
+- **Transport**: `SessionTransport` (async request -> bytes/status) and `SessionClient.fetch(at:)`
+  in core, with no Foundation networking in the test path; `URLSessionSessionTransport` in the
+  app is the single `URLSession` call site; `SessionConfiguration.client()` returns `nil` unless
+  `SUNDAYKEYS_SESSION_TOKEN` is set, with `SUNDAYKEYS_API_BASE` overriding the recorded base. The
+  deadline defaults to 5 s (assumption 15).
+- **Startup**: `AppModel.init(sessionClient:)`, `checkSession(at:)` and `apply(_:)`; the root
+  view calls `checkSession()` once from `onAppear`. `licenceStatus`, `launchAllowsPremiumSounds`
+  and `launch` are written only by `apply(_:)`, so the line and the permission cannot diverge.
+- **Decision**: a `grace_period` takes its permission from `LicenceStanding.access`, not from the
+  status label - the one behaviour the failing run above corrected.
 
 ## Still not verified
 
@@ -223,6 +270,9 @@ that closes this pass; that commit touches only this file, so the code under tes
   UI, and no existing control reads a licence, so the values are published and asserted but not
   drawn. Nothing about premium sounds is gated by them either, for the same reason - there is no
   existing premium-only surface to gate.
+- **The probe's own output was not read line by line.** The build job's log download returns a
+  truncated head, so the `licence probe:` assertions are evidenced by the step's exit status and
+  by the script's own `set -e`, not by quoted output.
 - **Nothing hardware-dependent moved.** No audio device, MIDI hardware, signed bundle or
   notarised app was involved in this pass.
 
