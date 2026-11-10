@@ -138,24 +138,28 @@ public final class ArpeggiatorService {
 
     /// Switches the arpeggiator on or off.
     ///
-    /// Switching it on while keys are held starts the pattern on that instant, and releases anything
-    /// that was being forwarded so the pattern takes over. Switching it off releases the pattern and
-    /// cancels its scheduled note offs; a key still held is left silent until it is pressed again.
+    /// Switching it on while keys are held starts the pattern on that instant: the notes that were
+    /// being forwarded are released and then held by the pattern, so the keys the player is already
+    /// holding are the first step's notes. Switching it off releases the pattern and cancels its
+    /// scheduled note offs; a key still held is left silent until it is pressed again.
     public func setEnabled(_ enabled: Bool, at time: TimeInterval) {
         guard enabled != isEnabled else { return }
         isEnabled = enabled
 
         if enabled {
-            for note in forwarded.sorted() {
+            let carried = forwarded.sorted()
+            forwarded.removeAll()
+            for note in carried {
                 sink.send(.noteOff(note: note, velocity: 0, channel: channel), at: time)
             }
-            forwarded.removeAll()
-            for note in held.sorted() {
+            for note in carried {
+                held.insert(note)
                 stepClock.hold(note, at: time)
             }
             stepClock.apply(settings(isRunning: true), at: time)
         } else {
             stepClock.stop(at: time)
+            held.removeAll()
             forwarded.removeAll()
         }
     }

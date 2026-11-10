@@ -49,6 +49,12 @@ public struct SplitMix64: RandomNumberGenerator, Sendable {
 public struct Arpeggiator: Sendable {
     public private(set) var style: ArpeggiatorStyle
     private var heldNotes: Set<UInt8>
+    /// Steps taken, not an index into the current pattern.
+    ///
+    /// A note that joins a running pattern has to sound on the step that follows it, so the
+    /// position may not be reduced against a shorter pattern while one plays: a one-note pattern
+    /// would otherwise wrap the position back to its start and repeat that note. The step itself
+    /// reads this modulo the length of the cycle it is about to walk.
     private var cursor: Int
     private var generator: SplitMix64
 
@@ -77,18 +83,21 @@ public struct Arpeggiator: Sendable {
 
     /// Holds a note. A note already held is not added twice, so a controller that
     /// repeats a note on does not lengthen the pattern.
+    ///
+    /// The cursor is left where it is, so a note that joins a running pattern sounds on the next
+    /// step rather than on the step a shorter pattern would have repeated.
     public mutating func hold(_ note: UInt8) {
-        let before = heldNotes.count
         heldNotes.insert(min(note, 127))
-        if heldNotes.count != before {
-            clampCursor()
-        }
     }
 
-    /// Releases a note. The pattern keeps playing the notes that remain.
+    /// Releases a note. The pattern keeps playing the notes that remain. The cursor stays a count
+    /// of steps taken and the next step reads it modulo the shorter cycle, so a release can never
+    /// leave it pointing past the end.
     public mutating func release(_ note: UInt8) {
         heldNotes.remove(note)
-        clampCursor()
+        if heldNotes.isEmpty {
+            cursor = 0
+        }
     }
 
     public mutating func releaseAll() {
@@ -117,7 +126,7 @@ public struct Arpeggiator: Sendable {
         case .up, .down, .upDown, .downUp:
             let cycle = cycleNotes(notes)
             let note = cycle[cursor % cycle.count]
-            cursor = (cursor + 1) % cycle.count
+            cursor += 1
             return [note]
         }
     }
@@ -138,18 +147,6 @@ public struct Arpeggiator: Sendable {
             let descending = Array(notes.reversed())
             guard notes.count > 2 else { return descending }
             return descending + Array(descending.dropFirst().dropLast().reversed())
-        }
-    }
-
-    private mutating func clampCursor() {
-        let notes = heldNotes.sorted()
-        guard !notes.isEmpty else {
-            cursor = 0
-            return
-        }
-        let length = cycleNotes(notes).count
-        if length > 0 {
-            cursor %= length
         }
     }
 }
