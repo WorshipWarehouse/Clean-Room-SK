@@ -28,18 +28,21 @@ public enum SessionLaunch: Equatable, Sendable {
     public static func resolve(_ outcome: SessionClientOutcome) -> SessionLaunch {
         switch outcome {
         case let .session(payload, standing):
+            // The launch obeys the licence half of the session standing. The entitlement
+            // counts are used where a backup or an output is asked for, not at launch.
+            let licenceStanding = standing.licence
             // A payload with no readable licence is `unlicensed`: the session answered, and
             // its answer was that this account has no licence this build can see.
             guard let licence = payload.licence.licence else {
-                return .unlicensed(standing)
+                return .unlicensed(licenceStanding)
             }
             switch licence.status {
             case .active:
-                return .licensed(standing)
+                return .licensed(licenceStanding)
             case .gracePeriod:
-                return .grace(standing)
+                return .grace(licenceStanding)
             case .expired:
-                return .refused(standing)
+                return .refused(licenceStanding)
             }
         case .unauthorised:
             // Section 12 records `access_token_expired_error`, and the refresh handshake that
