@@ -93,6 +93,15 @@ jobs:
           set -o pipefail
           bash tools/launch_smoke.sh
 
+      # Starts the audio graph from inside the app and reports whether it came up
+      # and rendered a voice, or why it could not. A machine with no output device
+      # is reported as a limitation with the app's own line, not as a pass.
+      - name: Probe the audio start
+        if: success()
+        run: |
+          set -o pipefail
+          bash tools/audio_smoke.sh
+
       # The bootstrap script documents the toolchain this package needs. Only its
       # --check path can run unattended: the install path would need Homebrew
       # casks and sudo, so it is left to the developer machine.

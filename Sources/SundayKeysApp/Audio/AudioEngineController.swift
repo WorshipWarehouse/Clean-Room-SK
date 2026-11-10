@@ -41,22 +41,30 @@ final class AudioEngineController {
         currentPatch.layers
     }
 
+    /// Starts the graph, or throws `AudioStartFailure` saying why it could not.
+    ///
+    /// No output device is checked for before `outputNode` is touched: reading the
+    /// hardware format raises an Objective-C exception when there is none, and that
+    /// cannot be caught here. Everything else about the start is arranged so a
+    /// failure leaves nothing attached to the engine.
     func start() throws {
         guard !isRunning else { return }
 
-        let outputFormat = engine.outputNode.inputFormat(forBus: 0)
-        let rate = outputFormat.sampleRate > 0 ? outputFormat.sampleRate : 48_000
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: rate, channels: 2) else {
-            throw NSError(
-                domain: "SundayKeysAudio",
-                code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Could not create a stereo render format"]
-            )
+        let reportedRate = DefaultOutputDevice.exists()
+            ? engine.outputNode.inputFormat(forBus: 0).sampleRate
+            : nil
+        let plan = try AudioStartPlanner.plan(forReportedSampleRate: reportedRate)
+
+        guard let format = AVAudioFormat(
+            standardFormatWithSampleRate: plan.sampleRate,
+            channels: AVAudioChannelCount(plan.channelCount)
+        ) else {
+            throw AudioStartFailure.unsupportedFormat(reportedSampleRate: plan.sampleRate)
         }
 
         // Built here, on the main thread: wavetable synthesis and voice pool
         // allocation must never happen on the render thread.
-        let keysound = RealtimeKeysoundEngine(sampleRate: rate, layers: currentPatch.layers)
+        let keysound = RealtimeKeysoundEngine(sampleRate: plan.sampleRate, layers: currentPatch.layers)
 
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -94,10 +102,10 @@ final class AudioEngineController {
             try engine.start()
         } catch {
             engine.detach(node)
-            throw error
+            throw AudioStartFailure.engineFailed(error.localizedDescription)
         }
 
-        sampleRate = rate
+        sampleRate = plan.sampleRate
         self.keysound = keysound
         sourceNode = node
         isRunning = true
