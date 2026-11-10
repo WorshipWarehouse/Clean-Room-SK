@@ -53,22 +53,17 @@ jobs:
       - name: Report every concurrency diagnostic
         run: |
           set -o pipefail
-          primary='^/.*\\.swift:[0-9]+:[0-9]+: (warning|error):'
+          primary='^/.*\.swift:[0-9]+:[0-9]+: (warning|error):'
           total=$(grep -cE "$primary" /tmp/strict.log || true)
           echo "diagnostics in the strict build: ${total:-0}"
-          grep -E "$primary" /tmp/strict.log \
+          { grep -E "$primary" /tmp/strict.log || true; } \
             | sed -E "s#^${PWD}/##" \
-            | sort -u \
-            | cut -d: -f1 \
-            | uniq -c \
-            | sort -rn
-          grep -E "$primary" /tmp/strict.log \
-            | sed -E "s#^${PWD}/##" \
-            | sort -u \
-            | while IFS= read -r line; do
-                file=${line%%:*}
-                echo "::warning file=${file}::${line#*: }"
-              done
+            | sort -u > /tmp/strict-primary.log
+          { cut -d: -f1 /tmp/strict-primary.log || true; } | sort | uniq -c | sort -rn
+          while IFS= read -r line; do
+            file=${line%%:*}
+            echo "::warning file=${file}::${line#*: }"
+          done < /tmp/strict-primary.log
 
       # The MIDI routing seam is gated: the transport protocol, its router, the
       # app model that conforms to it and the suite that exercises it. A new
