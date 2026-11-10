@@ -1,0 +1,33 @@
+name: wire-patch-transfer
+
+# One shot. Wires the patch transfer into the model and the window, runs the release
+# build, the bundle and the probe on this runner, and only then commits the write-up that
+# cites this run. Nothing is pushed unless every anchor is unique and the probe passed,
+# and the workflow and its script delete themselves in the last commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Wire, prove and record
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          set -o pipefail
+          python3 tools/wire_patch_transfer.py 2>&1 | tee /tmp/wire.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -40 /tmp/wire.log | tr -d '\r' | while IFS= read -r line; do
+              if [ -n "$line" ]; then echo "::error::${line}"; fi
+            done
+          fi
+          exit "$status"
