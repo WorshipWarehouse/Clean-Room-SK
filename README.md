@@ -13,7 +13,8 @@ Nothing here is produced by executing the original app, and no original source w
 | feature inventory | capability checklist with evidence and gaps |
 | implementation plan | contracts, milestones, unknowns |
 | app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence, an original EQ/chorus/delay/reverb chain per patch, a learned per-patch controller layout, and an ordered set list with a play head |
-| not yet built | `.app` bundle |
+| bundled app | `tools/bundle_app.sh` assembles and ad-hoc signs `SundayKeys.app`; CI lints the plist and verifies the signature on every push |
+| not yet launched | the bundle has never been opened, so the window, audio output and controller behaviour are untested |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -35,7 +36,8 @@ dispatch references over 2,527 descriptors.
 | `Sources/SundayKeysCore/Audio/Effects/` | EQ, chorus, delay and reverb processors and the chain that publishes their settings |
 | `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker, set list panel, layer editor, effects panel, controller mapping panel, CoreMIDI input, AVAudioEngine host |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
-| `.github/workflows/build.yml` | resolve, build, test, release build and bootstrap smoke check on a macOS runner |
+| `.github/workflows/build.yml` | resolve, build, test, release build, bundle and bootstrap smoke check on a macOS runner |
+| `tools/bundle_app.sh` | assembles, signs and verifies `SundayKeys.app` from the release build |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
 
 ## Build the app
@@ -43,14 +45,18 @@ dispatch references over 2,527 descriptors.
 ```bash
 swift build        # library and app target
 swift test         # core tests
+tools/bundle_app.sh  # release build, then build/SundayKeys.app
+open build/SundayKeys.app
 ```
 
 The same commands run on a macOS runner for every push, and the check run on a commit carries the
 result: the workflow also resolves the manifest, reports unique compiler warnings, builds the release
-configuration and runs `bash tools/bootstrap.sh --check` as a smoke test. There is no Xcode project
-yet: the package builds the app target, and bundling it into an `.app` is the next step in the
-roadmap. The install path of the bootstrap script is not exercised anywhere, because it installs
-Homebrew casks and needs sudo.
+configuration, runs the bundler and verifies its output, and runs `bash tools/bootstrap.sh --check` as
+a smoke test. There is no Xcode project: the package builds the app target and the bundler wraps it
+into an `.app` with its own identifier (`com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0)
+and an ad-hoc signature, so it can be launched on Apple silicon without a developer certificate. That
+signature is not distribution signing and nothing is notarised. The install path of the bootstrap
+script is not exercised anywhere, because it installs Homebrew casks and needs sudo.
 
 ## The instrument
 
@@ -162,6 +168,25 @@ build, every test suite including the set list ordering, persistence and set-lis
 release build and the bootstrap smoke check all pass. `docs/progress.md` records that run and the
 earlier ones, including the two assertions it caught and why they were wrong rather than the model.
 
+## The bundle
+
+`tools/bundle_app.sh` builds the release product and writes `build/SundayKeys.app`: the executable at
+`Contents/MacOS/SundayKeysApp`, a generated `Info.plist`, `PkgInfo`, and an ad-hoc signature. It then
+checks its own output, and the CI step fails if any check does.
+
+- the identifier is `com.worshipwarehouse.sundaykeys-cleanroom`, deliberately not the original's
+  `com.sundaysounds.sundaykeys`, so the two can be installed side by side;
+- the version is this implementation's own 0.5.0 build 5, not the original's 2.5.2 build 3367;
+- `LSMinimumSystemVersion` is 14.0, matching the package platform;
+- the signature is ad hoc, which is what Apple silicon needs to launch it without a developer
+  certificate, and is not distribution signing;
+- the checks are `plutil -lint`, the executable bit, `codesign --verify --strict`, and the declared
+  executable matching the one placed.
+
+Run [`42730684997`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) is the
+first to run the step, and it passed. The bundle has never been launched: no window has been opened,
+no audio device has been started and no controller has been connected, because that needs the Mac.
+
 ## Reproduce the analysis
 
 Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the app binary.
@@ -214,11 +239,12 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
   semantics, MIDI CC mappings, session contents, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- The package builds an app target rather than a bundled `.app`.
-- The effects chain is validated by offline tests that measure samples, not by listening, and the set
-  list panel and controller panel have never been looked at on a screen: no audio device, controller
-  or native launch has been exercised, because the Mac they need has been unreachable. No local build
-  has been run; every result comes from the macOS runner.
+- The bundle is assembled and its plist and signature are checked on the runner, but it has never
+  been launched: no window, audio device, controller or native menu has been exercised, because the
+  Mac they need has been unreachable. No local build has been run; every result comes from the macOS
+  runner.
+- The set list panel, the effects panel and the controller panel have never been looked at on a
+  screen.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
   independently licensed or recorded material.
 
