@@ -147,8 +147,9 @@ final class CatalogueClientTests: XCTestCase {
 
     func testATwoProductListKeepsTheServerOrder() async {
         let second = camelProduct.replacingOccurrences(of: "\"p1\"", with: "\"p2\"")
-        let body = "{\"data\":[\(camelProduct),\(second)]}"
-        let client = CatalogueClient(transport: StubTransport(body: body))
+        let client = CatalogueClient(
+            transport: StubTransport(body: "{\"data\":[\(camelProduct),\(second)]}")
+        )
 
         guard let parsed = documents(await client.fetchProducts()) else { return }
 
@@ -186,7 +187,9 @@ final class CatalogueClientTests: XCTestCase {
 
         _ = await client.fetchProducts()
 
-        XCTAssertNil(await recorder.first()?.bearerToken)
+        let request = await recorder.first()
+        XCTAssertNotNil(request)
+        XCTAssertNil(request?.bearerToken)
     }
 
     // MARK: - Failures
@@ -196,22 +199,22 @@ final class CatalogueClientTests: XCTestCase {
             transport: StubTransport(body: "{\"error\":{\"message\":\"products unavailable\"}}")
         )
 
-        XCTAssertEqual(
-            await client.fetchProducts(),
-            .malformed(.serverError("products unavailable"))
-        )
+        let outcome = await client.fetchProducts()
+        XCTAssertEqual(outcome, .malformed(.serverError("products unavailable")))
     }
 
     func testARefusedTokenIsUnauthorised() async {
         let client = CatalogueClient(transport: StubTransport(status: 401, body: ""))
 
-        XCTAssertEqual(await client.fetchProducts(), .unauthorised)
+        let outcome = await client.fetchProducts()
+        XCTAssertEqual(outcome, .unauthorised)
     }
 
     func testAServerFaultIsReportedWithItsStatus() async {
         let client = CatalogueClient(transport: StubTransport(status: 503, body: ""))
 
-        XCTAssertEqual(await client.fetchProducts(), .failed(status: 503))
+        let outcome = await client.fetchProducts()
+        XCTAssertEqual(outcome, .failed(status: 503))
     }
 
     func testAnUnreachableTransportIsNotACatalogue() async {
@@ -244,6 +247,7 @@ final class CatalogueClientTests: XCTestCase {
     func testAMissingDataEnvelopeIsReported() async {
         let client = CatalogueClient(transport: StubTransport(body: "{\"products\":[]}"))
 
-        XCTAssertEqual(await client.fetchProducts(), .malformed(.noDataEnvelope))
+        let outcome = await client.fetchProducts()
+        XCTAssertEqual(outcome, .malformed(.noDataEnvelope))
     }
 }
