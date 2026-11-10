@@ -153,3 +153,13 @@ extension Setlist {
         return select(entryID: slot.id)
     }
 }
+
+extension PatchBank {
+    /// The bank-level spelling of `Setlist.alignHead(to:)`, for a caller that holds the
+    /// bank rather than its list. The model asks for this on the value it already has,
+    /// which is the same path a test takes.
+    @discardableResult
+    public mutating func alignSetlistHead(to patchID: UUID) -> SetlistEntry? {
+        setlist.alignHead(to: patchID)
+    }
+}

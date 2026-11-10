@@ -133,6 +133,20 @@ final class SessionMemoryTests: XCTestCase {
         XCTAssertEqual(list.currentIndex, 1)
     }
 
+    /// The app model holds the bank, not the list, and calls this spelling. Without it the
+    /// model would not compile, which is exactly what the first run of this feature said.
+    func testTheBankAlignsItsOwnHeadToTheRestoredPatch() {
+        let a = patch("A")
+        let b = patch("B")
+        var bank = PatchBank(patches: [a, b], setlist: Setlist.bankOrder([a, b]))
+
+        let landed = bank.alignSetlistHead(to: b.id)
+
+        XCTAssertEqual(landed?.patchID, b.id)
+        XCTAssertEqual(bank.setlist.currentEntry?.patchID, b.id)
+        XCTAssertEqual(bank.setlist.currentIndex, 1)
+    }
+
     func testAPatchInNoSlotLeavesTheHeadWhereItWas() {
         let a = patch("A")
         let b = patch("B")
