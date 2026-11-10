@@ -40,7 +40,13 @@ public enum SessionLaunch: Equatable, Sendable {
             case .active:
                 return .licensed(licenceStanding)
             case .gracePeriod:
-                return .grace(licenceStanding)
+                // Rule 3: a grace window whose end has passed is downgraded, because the end
+                // the server sent is honoured over the label it sent. The launch takes its
+                // permission from the standing for exactly this case, so a status that says
+                // grace and an access that says downgraded cannot disagree here.
+                return licenceStanding.allowsPremiumSounds
+                    ? .grace(licenceStanding)
+                    : .refused(licenceStanding)
             case .expired:
                 return .refused(licenceStanding)
             }
@@ -73,14 +79,17 @@ public enum SessionLaunch: Equatable, Sendable {
     /// working and does not remove a licence the player may hold; only a verdict can.
     public var allowsPremiumSounds: Bool {
         switch self {
-        case .licensed, .grace, .unknown:
-            return true
+        case let .licensed(standing), let .grace(standing):
+            return standing.allowsPremiumSounds
         case .refused, .unlicensed:
             return false
+        case .unknown:
+            return true
         }
     }
 
-    /// Whether the launch refused the licensed session: `expired`, or no licence at all.
+    /// Whether the launch refused the licensed session: `expired`, no licence at all, or a
+    /// grace window whose end has passed.
     public var refusesLicensedSession: Bool {
         switch self {
         case .refused, .unlicensed:
