@@ -1,0 +1,30 @@
+name: append-progress
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Append the section and remove the machinery
+        run: |
+          set -euo pipefail
+          cat docs/re/arp-session-append.md >> docs/progress.md
+          rm docs/re/arp-session-append.md
+          rm .github/workflows/append_progress.yml
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name "WorshipWarehouse"
+          git config user.email "worshipwarehousesite@gmail.com"
+          git add -A
+          git commit -m "Record the arpeggiator session milestone"
+          git push origin HEAD:main
