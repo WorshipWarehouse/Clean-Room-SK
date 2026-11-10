@@ -102,6 +102,15 @@ jobs:
           set -o pipefail
           bash tools/audio_smoke.sh
 
+      # Creates the CoreMIDI client and input port from inside the app and lists
+      # the sources it finds. A runner with no controller reports zero sources as
+      # a limitation with the app's own line, not as a pass.
+      - name: Probe the MIDI start
+        if: success()
+        run: |
+          set -o pipefail
+          bash tools/midi_smoke.sh
+
       # The bootstrap script documents the toolchain this package needs. Only its
       # --check path can run unattended: the install path would need Homebrew
       # casks and sudo, so it is left to the developer machine.

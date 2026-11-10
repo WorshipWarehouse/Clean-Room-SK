@@ -3,16 +3,17 @@ import Darwin
 import Foundation
 import SundayKeysCore
 
-/// Startup evidence for the launch and audio smoke checks.
+/// Startup evidence for the launch, audio and MIDI smoke checks.
 ///
 /// A GUI app prints nothing by default, so a process that is merely alive proves
 /// only that the loader resolved its symbols. These markers record the points
-/// that matter — AppKit finishing launch, SwiftUI installing the root view, and
-/// the audio graph starting and rendering — so `tools/launch_smoke.sh` and
-/// `tools/audio_smoke.sh` can assert them instead of guessing from a process id.
+/// that matter — AppKit finishing launch, SwiftUI installing the root view, the
+/// audio graph starting and rendering, and the MIDI client being created and its
+/// sources enumerated — so `tools/launch_smoke.sh`, `tools/audio_smoke.sh` and
+/// `tools/midi_smoke.sh` can assert them instead of guessing from a process id.
 ///
-/// Both probes are driven by environment variables, so a player launching the app
-/// normally sees none of this:
+/// Every probe is driven by an environment variable, so a player launching the
+/// app normally sees none of this:
 ///
 /// - `SUNDAYKEYS_PROBE_EXIT_AFTER=<seconds>` asks the app to terminate itself
 ///   through the normal `NSApplication.terminate` path once that long has passed.
@@ -22,15 +23,20 @@ import SundayKeysCore
 ///   reports the voice count the render block actually produced, then exits. The
 ///   exit status is the probe's verdict: 0 started and rendered, 4 refused to
 ///   start, 5 started but produced no voice, 6 lost the graph it made.
+/// - `SUNDAYKEYS_PROBE_START_MIDI=1` creates the CoreMIDI client and input port,
+///   lists the sources it found and exits. 0 means the client and port were
+///   created and every online source connected — a zero-source list is a fact
+///   about the machine, not a failure — 4 no client, 5 no port, 6 a source that
+///   would not connect.
 @MainActor
 enum LaunchProbe {
     private static let marker = "SundayKeysApp"
     private static var rootViewAppeared = false
 
-    /// Held while the probe runs so the graph and the voice it is rendering are
-    /// not deallocated before the count is read. The timer reaches the graph
-    /// through this reference rather than capturing it, because the timer's block
-    /// is `@Sendable` and the graph is main-actor state.
+    /// Held while the audio probe runs so the graph and the voice it is
+    /// rendering are not deallocated before the count is read. The timer reaches
+    /// the graph through this reference rather than capturing it, because the
+    /// timer's block is `@Sendable` and the graph is main-actor state.
     private static var probeController: AudioEngineController?
 
     static func report(_ event: String) {
@@ -68,12 +74,12 @@ enum LaunchProbe {
 
     /// Starts the audio graph and reports what happened.
     ///
-    /// This runs the same `AudioEngineController.start()` the Start button runs, on
-    /// the same bundle, with no window interaction, so a machine with no output
-    /// device — or an engine that refuses to start — says so in one line instead of
-    /// staying a status message nobody sees. Playing a note and reading the voice
-    /// count is the part that proves the render block ran: a voice only exists once
-    /// the audio callback has drained the command ring.
+    /// This runs the same `AudioEngineController.start()` the Start button runs,
+    /// on the same bundle, with no window interaction, so a machine with no
+    /// output device — or an engine that refuses to start — says so in one line
+    /// instead of staying a status message nobody sees. Playing a note and reading
+    /// the voice count is the part that proves the render block ran: a voice only
+    /// exists once the audio callback has drained the command ring.
     static func probeEngineIfRequested() {
         guard let raw = ProcessInfo.processInfo.environment["SUNDAYKEYS_PROBE_START_ENGINE"],
               raw != "0",
@@ -111,6 +117,30 @@ enum LaunchProbe {
             }
         }
     }
+
+    /// Starts the MIDI input the Start button starts, reports what the client
+    /// saw, and exits with the verdict.
+    ///
+    /// Nothing before this proved a CoreMIDI client could be created at all: the
+    /// launch check never presses Start, and `MIDIInputService.start()` used to
+    /// drop its `OSStatus`. A machine with no controller reports zero sources and
+    /// still exits 0, which is the honest result for that hardware.
+    static func probeMIDIIfRequested() {
+        guard let raw = ProcessInfo.processInfo.environment["SUNDAYKEYS_PROBE_START_MIDI"],
+              raw != "0",
+              !raw.isEmpty
+        else { return }
+
+        report("MIDI probe starting")
+        let service = MIDIInputService()
+        let verdict = service.start()
+        for line in verdict.lines {
+            report(line)
+        }
+        service.stop()
+        report("MIDI client disposed")
+        exit(verdict.exitCode)
+    }
 }
 
 /// The delegate exists so the probes have a point to report from that is
@@ -121,5 +151,6 @@ final class SundayKeysAppDelegate: NSObject, NSApplicationDelegate {
         LaunchProbe.reportLaunchFinished()
         LaunchProbe.scheduleProbeExitIfRequested()
         LaunchProbe.probeEngineIfRequested()
+        LaunchProbe.probeMIDIIfRequested()
     }
 }
