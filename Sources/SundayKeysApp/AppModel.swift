@@ -11,6 +11,12 @@ final class AppModel: ObservableObject {
     @Published private(set) var voiceCount = 0
     @Published private(set) var heldNotes: Set<UInt8> = []
 
+    /// What the MIDI start last did. Published so the view layer has something to
+    /// read, and retained in `midiStatusBoard` so a refusal is a piece of state
+    /// rather than a value that is read once and forgotten.
+    @Published private(set) var midiStatus = MIDIStatus.notStarted
+    private var midiStatusBoard = MIDIStatusBoard()
+
     /// The whole bank the player switches between, and which patch of it is
     /// selected. This lives here rather than in the audio controller because the
     /// controller only ever knows the one patch it is voiced for.
@@ -72,7 +78,14 @@ final class AppModel: ObservableObject {
         midi.onSourcesChanged = { [weak self] names in
             Task { @MainActor in self?.midiSources = names }
         }
-        midi.start()
+
+        // The verdict used to be discarded here, so a client that could not be
+        // created read exactly like a machine with no controller. It is recorded
+        // now, and the status line the window already shows says which happened.
+        let engineLine = statusMessage
+        midiStatusBoard.record(midi.start())
+        midiStatus = midiStatusBoard.status
+        statusMessage = midiStatus.message(base: engineLine)
     }
 
     func stop() {
@@ -80,6 +93,8 @@ final class AppModel: ObservableObject {
         meter = nil
         audio.stop()
         midi.stop()
+        midiStatusBoard.reset()
+        midiStatus = midiStatusBoard.status
         isEngineRunning = false
         voiceCount = 0
         heldNotes.removeAll()
@@ -246,7 +261,8 @@ final class AppModel: ObservableObject {
     /// Ranges are stored as authored and interpreted as a span, so setting the low
     /// edge above the high edge still leaves a usable layer rather than muting it.
     func setLayerLower(_ layerID: UInt8, note: UInt8) {
-        editLayer(layerID) { $0.range = NoteRange(lower: note, upper: $0.range.upper) }
+        editLayer(layerID) {
+            $0.range = NoteRange(lower: note, upper: $0.range.upper) }
     }
 
     func setLayerUpper(_ layerID: UInt8, note: UInt8) {
