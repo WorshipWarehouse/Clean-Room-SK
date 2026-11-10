@@ -390,7 +390,7 @@ What changed, and why the seam had to exist first:
   SwiftPM supports. It is separate from the core suite so a failure says which layer broke.
 - `Tests/SundayKeysAppTests/LicenceEnforcementTests.swift` holds five cases, each deriving its
   gate from payload bytes through the real `SessionClient` and `SessionLaunch` over a stub
-transport, never a hand-built `LicenceGate`:
+  transport, never a hand-built `LicenceGate`:
   - an `expired` standing: `noteOn` leaves the recorder untouched, `refusedNotes` is 1 and then
     2 after a second request, and `licenceGate.line` is
     `licensed playback refused: Session refused: Licence expired: sounds downgraded`;
@@ -408,9 +408,9 @@ Rule 21 records the one thing the first run taught: the arpeggiator's releases s
 voices. The guard is on `noteOn`, so the assertion is that no voice is *started*, not that the
 recorder is silent.
 
-First run on the code head, `72935ad` (parent of the fix), run `42910408030`: steps 1-5 and
-`Report warnings` `success`, then `Test` `failure` at 22:01:40 after five seconds. The check-run
-annotations, read from `/check-runs/130159343612/annotations`, name exactly one case:
+First run on `72935ad` (the parent of the fix), run `42910408030`: steps 1-5 and `Report warnings`
+`success`, then `Test` `failure` at 22:01:40 after five seconds. The check-run annotations, read
+from `/check-runs/130159343612/annotations`, name exactly one case:
 
     LicenceEnforcementTests.swift:153: error: testAnArpeggiatorStepIsRefusedByTheSameGate :
     XCTAssertEqual failed: ("[\"off 60\", \"off 60\"]") is not equal to ("[]")
@@ -425,7 +425,7 @@ re-dispatched. That head is the one the table below is about.
 | click | 42910942667 | `completed`, `success` 22:04:26 | toolchain 22:03:42-44, Build (release) 22:03:44-22:04:18, Bundle 22:04:18-19, click probe 22:04:19-24, complete 22:04:26 |
 | patch-transfer | 42910942723 | `completed`, `success` 22:04:38 | toolchain 22:03:50-54, Build (release) 22:03:54-22:04:29, Bundle 22:04:29-31, patch-transfer probe 22:04:31-33, complete 22:04:36 |
 | session | 42910942824 | `completed`, `success` 22:04:37 | toolchain 22:03:45-47, Build (release) 22:03:47-22:04:27, Bundle 22:04:27-29, session-resume probe 22:04:29-33, complete 22:04:35 |
-| concurrency | see below | not read to a terminal state on this head | three dispatches were made; none obtained a runner |
+| concurrency | 42911573398 | `completed`, `success` 22:09:19 | Set up job 22:08:40-41, checkout 22:08:41-42, toolchain 22:08:42-46, Build with complete concurrency checking 22:08:46-22:09:18, Prove the flag reached the compiler 22:09:18, Report every concurrency diagnostic 22:09:18, Fail on diagnostics in the MIDI routing seam 22:09:18, complete 22:09:19 |
 
 What those steps mean for this pass:
 
@@ -433,26 +433,19 @@ What those steps mean for this pass:
   of it. The step ran 22:04:18 to 22:04:23 and passed, so the refusal at the real `noteOn`, the
   counted refusals, the permitted control and both arpeggiator cases are run-proven rather than
   read off the code.
-- `Build (debug, with tests)` compiling the new app test target's link step is the evidence that
-  a test target can drive the executable target here (no `Undefined symbols: _main`);
-  `Build (release)` and `Bundle` on the same head show the shipped target is unchanged by the
-  voicing seam.
+- `Build (debug, with tests)` compiling the new app test target is the evidence that a test
+  target can drive the executable target here (no `Undefined symbols: _main`); `Build (release)`
+  and `Bundle` on the same head show the shipped target is unchanged by the voicing seam.
 - `Probe the licence session` ran `tools/licence_smoke.sh` again and passed, so the nine
   `LicenceGateTests` and the six-launch probe coexist with the new suite.
-
-Concurrency on this head, stated as it was read and not inferred:
-
-- `42910942164` (dispatch): `queued`/`pending` with an empty job list for over a minute, then
-  cancelled.
-- `42910931084` (push-triggered run for the same commit): a runner was assigned at 22:03:33 and
-  the job reported **no steps at all** for over three minutes - a hung job, not a build. It was
-  cancelled at 22:07.
-- `42911269091`, then `42911573398` (re-dispatches): both stayed `pending` with no job, because
-  the hung job above still held the workflow's slot.
-
-So the concurrency workflow has **no read terminal success on this head**. Nothing here claims
-one: the strict-concurrency build is the last of the five still outstanding, and it is carried in
-"Still not verified" rather than asserted.
+- The concurrency workflow needed four attempts on this head. `42910942164` (dispatch) sat
+  `pending` with an empty job list and was cancelled; the push-triggered `42910931084` was
+  assigned a runner at 22:03:33 and then reported **no steps at all** for over three minutes - a
+  hung job, not a build - and was cancelled at 22:07; `42911269091` (re-dispatch) never left
+  `pending`, because the hung job still held the workflow's slot, so it was cancelled and
+  re-dispatched as `42911573398`, which got a runner at 22:08:39 and finished green at 22:09:19.
+  Only the last of the four is a result; the other three are the queue, recorded so the numbers
+  in this table are not mistaken for one attempt.
 
 ## Still not verified
 
@@ -477,10 +470,6 @@ one: the strict-concurrency build is the last of the five still outstanding, and
   a manual clock and asserted through its controller; no run enables the arpeggiator in a built
   bundle, and no step shows it stepping on screen. What is proven is that its generated note
   arrives at `AudioEngineController.noteOn` and is refused there.
-- **The concurrency workflow has not been read to a terminal state on the newest head.** Four of
-  the five workflows are read green on `27b1318f`; the strict-concurrency job never got a working
-  runner (see the three run IDs above). The last concurrency success read on any head is
-  `42908970806` at `68ad1fd`.
 - **The probe's own output was not read line by line.** The build job's log download returns a
   truncated head, so the `licence probe:` assertions are evidenced by the step's exit status and
   by the script's `set -o pipefail` and explicit `fail` calls, not by quoted output.
