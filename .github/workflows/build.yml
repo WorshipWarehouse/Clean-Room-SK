@@ -114,6 +114,17 @@ jobs:
           set -o pipefail
           bash tools/midi_smoke.sh
 
+      # Runs the app's own launch path six times, each with a different stubbed
+      # session, and asserts what AppModel applied: licensed for `active`, licensed
+      # with a countdown for `grace_period`, refused for `expired`, unlicensed for a
+      # missing or unreadable licence, and no verdict at all when the transport throws.
+      # No request leaves the runner.
+      - name: Probe the licence session
+        if: success()
+        run: |
+          set -o pipefail
+          bash tools/licence_smoke.sh
+
       # The bootstrap script documents the toolchain this package needs. Only its
       # --check path can run unattended: the install path would need Homebrew
       # casks and sudo, so it is left to the developer machine.

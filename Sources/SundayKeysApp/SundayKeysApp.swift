@@ -3,7 +3,10 @@ import SwiftUI
 @main
 struct SundayKeysApp: App {
     @NSApplicationDelegateAdaptor(SundayKeysAppDelegate.self) private var appDelegate
-    @StateObject private var model = AppModel()
+    /// The session client exists only when a token was supplied in the environment. The
+    /// sign-in flow is not reconstructed, so a launch with no token runs local-first and the
+    /// model records that the licence was not checked rather than inventing a verdict.
+    @StateObject private var model = AppModel(sessionClient: SessionConfiguration.client())
 
     var body: some Scene {
         WindowGroup("Sunday Keys") {
@@ -20,6 +23,13 @@ struct SundayKeysApp: App {
                     // nothing at all.
                     MetronomeProbe.probeIfRequested()
                     PatchTransferProbe.probeIfRequested()
+                    // The licence probe builds its own model over a stub transport and exits
+                    // with a verdict, so it never shares this window's model.
+                    LicenceProbe.probeIfRequested()
+                    // One read of the session at launch, through whatever transport the client
+                    // was built with. With no client this returns at once and the status says
+                    // the licence was not checked.
+                    Task { await model.checkSession() }
                 }
         }
     }
