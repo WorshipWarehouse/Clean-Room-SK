@@ -1,0 +1,120 @@
+name: wire session probe
+
+# One shot. Adds the session probe call to the app delegate and the probe step to the
+# build workflow, then removes itself in the same commit. Each anchor has to appear
+# exactly once or the run stops without writing anything, and the edited workflow is
+# parsed again afterwards so a step that does not parse is never committed.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Identify the commit author
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add the probe call and the probe step
+        run: |
+          set -o pipefail
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          try:
+              import yaml
+          except ImportError:
+              import subprocess
+              subprocess.run([sys.executable, "-m", "pip", "install", "--quiet", "pyyaml"], check=True)
+              import yaml
+
+
+          def indent_of(line):
+              return line[: len(line) - len(line.lstrip())]
+
+
+          def sole_index(lines, needle, what):
+              hits = [index for index, line in enumerate(lines) if needle in line]
+              if len(hits) != 1:
+                  sys.exit(f"wire: expected one {what}, found {len(hits)}")
+              return hits[0]
+
+
+          delegate_path = pathlib.Path("Sources/SundayKeysApp/LaunchProbe.swift")
+          delegate = delegate_path.read_text().splitlines()
+          anchor = delegate[sole_index(delegate, "LaunchProbe.probeMIDIConnectIfRequested()", "MIDI connect call")]
+          pad = indent_of(anchor)
+          delegate.insert(
+              delegate.index(anchor) + 1, pad + "SessionProbe.probeSessionIfRequested()"
+          )
+          if sum("SessionProbe.probeSessionIfRequested()" in line for line in delegate) != 1:
+              sys.exit("wire: the probe call was not inserted exactly once")
+          delegate_path.write_text("\n".join(delegate) + "\n")
+
+          workflow_path = pathlib.Path(".github/workflows/build.yml")
+          workflow = workflow_path.read_text().splitlines()
+          at = sole_index(workflow, "- name: Verify the bootstrap script", "bootstrap step")
+          pad = indent_of(workflow[at])
+          workflow[at:at] = [
+              "",
+              pad + "# Starts the app three times against one Application Support folder: once to",
+              pad + "# write a bank and remember the third patch, once to relaunch and read what it",
+              pad + "# restored, and once with a hint naming a patch the bank no longer has. The",
+              pad + "# script asserts the app's own lines, so a green step means the resume ran.",
+              pad + "- name: Probe the session resume",
+              pad + "  if: success()",
+              pad + "  run: |",
+              pad + "    set -o pipefail",
+              pad + "    bash tools/session_smoke.sh",
+          ]
+          workflow_path.write_text("\n".join(workflow) + "\n")
+
+          parsed = yaml.safe_load(workflow_path.read_text())
+          steps = parsed["jobs"]["macos"]["steps"]
+          names = [step.get("name") for step in steps]
+          if names.count("Probe the session resume") != 1:
+              sys.exit(f"wire: the probe step is not in the parsed workflow: {names}")
+          index = names.index("Probe the session resume")
+          if "tools/session_smoke.sh" not in steps[index]["run"]:
+              sys.exit("wire: the probe step does not run the script")
+          if "Verify the bootstrap script" not in names:
+              sys.exit("wire: the bootstrap step disappeared")
+          if steps[index + 1].get("name") != "Verify the bootstrap script":
+              sys.exit("wire: the probe step was not inserted before the bootstrap check")
+          print(f"wire: call added after {anchor.strip()!r}")
+          print(f"wire: step added before the bootstrap check, {len(steps)} steps in the job")
+          PY
+
+      - name: Remove this job
+        run: git rm --quiet .github/workflows/wire_probe.yml
+
+      - name: Commit and push
+        run: |
+          set -o pipefail
+          git add -A
+          git commit -m "Run the session probe in the build workflow [skip ci]"
+          git push
+          git log -1 --stat
+
+      - name: Start the build on the wired commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          curl -sS -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches" \
+            -d '{"ref":"main"}'
+          echo "dispatched the build on $(git rev-parse HEAD)"
