@@ -18,6 +18,7 @@ Nothing here is produced by executing the original app, and no original source w
 | audio started in CI | the runner presses Start from inside the app, the graph opens on its default output device, plays a note and the render block reports a rendered voice; a machine with no output device is a typed error rather than a crash |
 | MIDI connected in CI | the runner creates a CoreMIDI client and an input port, enumerates the source list, then publishes a virtual source of its own and lets the engine's own enumeration find it and connect it; the status reads `MIDI ready, 1 of 1 source(s) connected`, and a start with no source still says so instead of hiding it |
 | MIDI received in CI | the runner sends a note on, a note off and a control change from a virtual source into the app's own input port, and the app reports the three messages it parsed and the one of two enabled layers it routed the note to |
+| session resumed on launch | the patch that was playing is remembered in its own file beside the bank, so a relaunch opens where the service left off rather than at the first patch; a stale or unreadable hint falls back and says why |
 | not yet verified on hardware | no controller has ever been connected and no person has seen the window; the only MIDI traffic the app has ever seen came from the probe's own virtual source |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
@@ -350,6 +351,31 @@ channel 1", "MIDI receive probe: received note off 60 velocity 64 on channel 1",
 layer routing sent note 60 to 1 of 2 enabled layer(s)" and "MIDI receive probe: outcome: the app
 parsed every packet: 1 note on, 1 note off, 1 control change". A physical controller and a window
 are still missing.
+
+## Session scope
+
+The bank has always kept the sounds; it did not keep where the player was. Every launch
+opened the first patch in bank order, so a player rehearsing the fourth song of a service was
+put back on the first one. The selection is remembered now, in a file of its own.
+
+- `SessionMemory { lastPatchID }` lives in `session.json` beside `patches.json`, so the bank's
+  format and its version 4 documentation do not move and a bank from an older build still
+  loads;
+- `SessionScope.restore(memory:patches:)` resolves a launch to `remembered`, `fallback` with
+  the reason, or `emptyBank`, and the status line names which happened - `Resumed Worship
+  Pad` or `Opened Sunday Keys: the patch from the last launch is gone`;
+- a missing, unreadable or malformed hint reads as nothing remembered, because a hint about
+  the previous launch must never cost the bank;
+- `Setlist.alignHead(to:)` puts the play head on the first slot that plays the restored patch,
+  so the position shown and the sound playing agree, and a patch that is in no slot leaves
+  the head where it was;
+- the model records the selection on every path that changes it and before a manual save; the
+  write is best effort and is not on the bank's save path.
+
+`Tests/SundayKeysCoreTests/SessionMemoryTests.swift` covers the three outcomes, their lines,
+the round trip, a corrupt file, the head alignment and where the file sits. It is proven by
+those tests and by the suites passing on the runner: no probe starts the app twice, so the
+on-disk resume has not run end to end and no window has been seen.
 
 ## Reproduce the analysis
 

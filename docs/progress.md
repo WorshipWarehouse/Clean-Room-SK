@@ -24,6 +24,7 @@ this file tracks state.
 | Build, MIDI status | the verdict is turned into one status line in the core module and the model retains it, so a refused client or port, a refused connect and an empty source list each read differently in the window | `Sources/SundayKeysCore/MIDI/MIDIStatus.swift`, run `42735872524` |
 | Build, MIDI status tracking | the status follows the source list for as long as the client lives: a source appearing, disappearing or recovering updates it without pressing Start, and a refusal is kept only while it still applies | `Sources/SundayKeysCore/MIDI/MIDISourceTracker.swift`, `MIDIStatusBoard.refresh(with:)`, run `42737094402` |
 | Build, MIDI connect | the port's connect loop runs on a machine with no hardware: the probe publishes a virtual source, the engine enumerates it, the port connects it and the status says so | `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift`, `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift`, run `42740507134` |
+| Build, session scope | the patch that was playing is remembered beside the bank and resolved at launch with a named fallback, and the set-list head follows it | `Sources/SundayKeysCore/Session/SessionMemory.swift`, run `42819855234` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention, MIDI source tracking across refreshes | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
@@ -685,21 +686,87 @@ one packet - the multi-message case is covered by the probe's own packet list an
 | `42744377274` | `dc78b8e` | green: the app received and parsed the note on, note off and control change |
 | `42744820518` | `16b2c9f` | green, and the routing and verdict lines are published as well |
 
+## Session scope milestone: a launch resumes where the service left off
+
+The bank keeps the patches, their effects, the controller layouts and the set list with its
+play head, so a relaunch already found every sound and every service. It did not keep the
+one thing a player asks for first: which patch was playing. `AppModel.loadBank()` assigned
+`selectedPatchID = first.id` unconditionally, so a player who had been rehearsing the fourth
+song was put back on the first one at every launch. That was next action 4, and it is now
+decided and implemented.
+
+- **The hint lives beside the bank, not in it.** `SessionMemory { lastPatchID }` is written to
+  `session.json` in the same Application Support directory as `patches.json`. Keeping it out
+  of the bank means the bank's own format and its version 4 documentation do not move, a bank
+  from an older build still loads untouched, and a hint that cannot be read cannot stop the
+  bank from loading.
+- **Three outcomes, each named.** `SessionScope.restore(memory:patches:)` returns
+  `remembered`, `fallback(because:)` - with `.nothingRemembered` or `.patchMissing` - or
+  `emptyBank`. A first launch and a deleted patch therefore read differently from a resume
+  in the status line instead of every case looking like a resume that happened to land on
+  the first patch.
+- **A broken hint is not an error.** `SessionStore.load()` returns nil for a missing,
+  unreadable or malformed file, because the memory only describes the previous launch; the
+  cost of a bad hint is the resume and nothing else.
+- **The head follows the restored sound.** `Setlist.alignHead(to:)` moves the play head onto
+  the first slot that plays the restored patch, so the position shown and the sound playing
+  agree. A patch that is in no slot leaves the head alone: the player chose it directly, and
+  their service order is not rewritten.
+- **Recording never rides on the bank's save.** The model writes the hint on every path that
+  changes the selection - patch switch, add, delete, set-list play, set-list step - and again
+  before a manual bank save. The write is best effort: it cannot fail a switch, and nothing
+  in the session depends on it.
+
+`SessionMemoryTests` drives those cases directly: no memory, memory naming a present patch,
+memory naming a deleted patch, an empty bank, the three lines, the round trip through its own
+file, a corrupt file degrading to nothing remembered, the file sitting beside the bank, the
+head moving to the restored patch, and the head staying put for a patch that is in no slot.
+
+**Observed.** Run [`42819855234`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42819855234)
+on `7d89365`: the run concluded success, with 15 of 15 steps passing.
+
+- `Set up job`: success 12:55:19 to 12:55:20
+- `Run actions/checkout@v5`: success 12:55:20 to 12:55:22
+- `Report the toolchain`: success 12:55:22 to 12:55:25
+- `Resolve dependencies`: success 12:55:25 to 12:55:29
+- `Build (debug, with tests)`: success 12:55:29 to 12:55:53
+- `Report warnings`: success 12:55:53 to 12:55:53
+- `Test`: success 12:55:53 to 12:55:56
+- `Build (release)`: success 12:55:56 to 12:56:18
+- `Bundle the app`: success 12:56:18 to 12:56:20
+- `Launch the app`: success 12:56:20 to 12:56:26
+- `Probe the audio start`: success 12:56:26 to 12:56:29
+- `Probe the MIDI start`: success 12:56:29 to 12:56:31
+- `Verify the bootstrap script`: success 12:56:31 to 12:56:35
+- `Post Run actions/checkout@v5`: success 12:56:35 to 12:56:38
+- `Complete job`: success 12:56:38 to 12:56:39
+
+The job published these annotations, verbatim:
+
+- none
+
+What this does not show: nobody has launched the app twice on a Mac with a memory file
+present, so the resume has been proven by unit tests and by the wired model compiling and its
+suites passing, not by a relaunch; and no window has been seen, so the line it produces has
+been read in a test and never on a screen.
+
 ## Next actions, in order
 
 1. **A controller on a real Mac.** Every MIDI packet so far came from the probe's own virtual
-   source. A physical device is the only way to see a real packet list, a real source name and what
-   a controller sends when its knobs move; the virtual path is green, so this is validation rather
-   than a blocker.
-2. **Hardware MIDI refinements.** Channel filtering, program change onto the patch index and the
-   learned controller layout all run on the virtual path now; untested on hardware are a device that
-   sends running status, several messages per packet, or an active-sensing stream.
-3. **The panel status.** The MIDI status line and the routing behaviour have never been looked at on
-   a screen; a window and a person are what is missing, not code.
-4. **Session scope.** Patches, effects, mapping and the set list persist; what a service should keep
-   across launches (last patch, set position, mapping edits) is not decided.
-5. **Decompilation of the next targets** stays blocked on host access to the original binary; see
-   `docs/re/access-determination.md`.
+   source. A physical device is the only way to see a real packet list, a real source name and
+   what a controller sends when its knobs move; the virtual path is green, so this is
+   validation rather than a blocker.
+2. **Hardware MIDI refinements.** Channel filtering, program change onto the patch index and
+   the learned controller layout all run on the virtual path now; untested on hardware are a
+   device that sends running status, several messages per packet, or an active-sensing stream.
+3. **The panel status.** The MIDI status line and the routing behaviour have never been looked
+   at on a screen; a window and a person are what is missing, not code.
+4. **A launch that resumes.** The restore path is unit-tested and wired into the model, but no
+   probe starts the app twice with a `session.json` present, so the on-disk resume has never
+   run end to end; a probe that writes a bank and relaunches from it is the missing piece.
+5. **Decompilation of the next targets** stays blocked on host access to the original binary;
+   see `docs/re/access-determination.md`.
+
 ## Build verification
 
 `.github/workflows/build.yml` runs the steps listed above on a `macos-15` runner for every push to
