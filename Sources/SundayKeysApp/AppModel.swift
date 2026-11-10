@@ -34,6 +34,10 @@ final class AppModel: ObservableObject {
     private let audio = AudioEngineController()
     private let midi = MIDIInputService()
     private let store = PatchStore(url: PatchStore.defaultURL())
+    /// The patch the last launch ended on. It lives in its own file beside the bank,
+    /// so the bank format does not move and an unreadable hint can never stop the
+    /// bank from loading.
+    private let sessionStore = SessionStore(url: SessionStore.defaultURL())
     private var meter: Timer?
 
     init() {
@@ -126,6 +130,7 @@ final class AppModel: ObservableObject {
         }
         audio.setPatch(patch)
         lastEvent = "patch \(patch.name)"
+        rememberSelection()
         bankStatus = "Switched to \(patch.name)"
     }
 
@@ -155,6 +160,7 @@ final class AppModel: ObservableObject {
         audio.setPatch(copy)
         // Adding a patch does not silently extend the service; the player adds the
         // slot deliberately.
+        rememberSelection()
         bankStatus = "Added \(copy.name), not saved yet"
     }
 
@@ -168,6 +174,7 @@ final class AppModel: ObservableObject {
             selectedPatchID = bank.patches[min(index, bank.patches.count - 1)].id
             audio.setPatch(patch)
         }
+        rememberSelection()
         bankStatus = "Deleted a patch, not saved yet"
     }
 
@@ -204,6 +211,7 @@ final class AppModel: ObservableObject {
             audio.setPatch(patch)
         }
         lastEvent = "set \(patch.name)"
+        rememberSelection()
         bankStatus = "Set list: \(patch.name)"
     }
 
@@ -225,6 +233,7 @@ final class AppModel: ObservableObject {
         learningTarget = nil
         audio.setPatch(next)
         lastEvent = "patch \(next.name)"
+        rememberSelection()
         bankStatus = "Stepped to \(next.name)"
     }
 
@@ -318,11 +327,19 @@ final class AppModel: ObservableObject {
 
     func saveBank() {
         do {
+        rememberSelection()
             try store.save(bank)
             bankStatus = "Saved \(bank.patches.count) patch\(bank.patches.count == 1 ? "" : "es") and \(bank.setlist.entries.count) set list slot\(bank.setlist.entries.count == 1 ? "" : "s")"
         } catch {
             bankStatus = "Could not save: \(error.localizedDescription)"
         }
+    }
+
+    /// Writes what is playing, best effort. It is a hint about the next launch, so a
+    /// failed write costs the resume and nothing in the session, and the bank's own save
+    /// path never depends on it.
+    private func rememberSelection() {
+        try? sessionStore.save(SessionMemory(lastPatchID: selectedPatchID))
     }
 
     private func loadBank() {
@@ -337,9 +354,13 @@ final class AppModel: ObservableObject {
             // A hand-edited file can name a patch that is not there; the set list is
             // pruned rather than left with a slot that cannot play.
             bank.setlist.prune(keeping: Set(bank.patches.map { $0.id }))
-            selectedPatchID = first.id
+            // Resolve where the player left off before anything is voiced, so the
+            // first patch the engine holds is the one the window will show.
+            let restore = SessionScope.restore(memory: sessionStore.load(), patches: bank.patches)
+            selectedPatchID = restore.patchID ?? first.id
+            bank.alignSetlistHead(to: selectedPatchID)
             audio.setPatch(patch)
-            bankStatus = "Loaded \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es") and \(loaded.setlist.entries.count) set list slot\(loaded.setlist.entries.count == 1 ? "" : "s")"
+            bankStatus = "\(restore.line), \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es") and \(loaded.setlist.entries.count) set list slot\(loaded.setlist.entries.count == 1 ? "" : "s")"
         } catch {
             bankStatus = "Could not read the bank: \(error.localizedDescription)"
             audio.setPatch(patch)
