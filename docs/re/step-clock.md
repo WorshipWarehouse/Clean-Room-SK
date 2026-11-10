@@ -24,7 +24,8 @@ Recorded as Unknown, and deliberately not implemented or guessed at:
 - gate length, and whether a step sends a note off at all;
 - swing, latch, and whether the pattern restarts on a new chord;
 - what happens to a scheduled step when the tempo changes mid-phrase;
-- the velocity each step carries.
+- the velocity each step carries, and whether the original switches the effect off without releasing
+  the notes it is playing.
 
 ## Decided here, for a testable first version
 
@@ -56,6 +57,33 @@ Recorded as Unknown, and deliberately not implemented or guessed at:
   audio engine interface: wiring the sink to `RealtimeKeysoundEngine.noteOn/noteOff` is the caller's
   decision.
 
+## The caller's contract
+
+`ArpeggiatorService` is what connects a keyboard to the clock: it owns the held keys and the
+`StepClock`, so every change a player makes is one call.
+
+- **Key press.** With the arpeggiator on, a press joins the held set and is handed to the clock. The
+  first press of a new chord starts the pattern on that instant, and a press that arrives mid-phrase
+  joins it on the next step. Pressing a note already held changes nothing.
+- **Key release.** A release ends a sounding note at once, cancels its scheduled note off, and stops
+  the pattern when it was the last note held.
+- **Off means straight through.** With the arpeggiator off, a press and a release are forwarded to
+  the note path unchanged and carry the pressed velocity, so the keyboard still plays.
+- **Switching.** Turning the arpeggiator on while keys are held releases anything forwarded and
+  starts the pattern on that instant. Turning it off releases the pattern and cancels its scheduled
+  note offs; a key still held is left silent until it is pressed again. What the original does when
+  the effect is switched is **Unknown**, so this is this repository's own rule.
+- **Changes.** Style, tempo, division, gate and velocity each have their own call and go straight to
+  the clock, so a tempo or division change lands after the step already scheduled and a style change
+  takes effect on the next step.
+- **Where the notes go.** The service emits through the same `NoteEventSink` the clock uses. By
+  default that is `KeysoundNoteSink`, which forwards each `MIDIMessage` to a `KeysoundNoteTarget`;
+  `RealtimeKeysoundEngine` already has `noteOn(note:velocity:)` and `noteOff(note:)`, so it conforms
+  as it stands and the engine's interface is untouched. The stepped notes therefore reach the note
+  path that already exists. A test passes its own sink to read the exact instants.
+- **Velocity.** Every step carries the service's configured velocity rather than the pressed one,
+  because the pattern is not tied to one key. The original's per-step velocity is **Unknown**.
+
 ## What the tests prove
 
 `Tests/SundayKeysCoreTests/StepClockTests.swift` drives a virtual clock and asserts exact
@@ -67,6 +95,18 @@ change both apply after the pending step; that an empty held set produces no eve
 note lands on the tick that sees it; that a tick exactly on the first step produces exactly one
 step; and that a chord style emits every held note at one timestamp in pitch order.
 
-They prove scheduling and ordering, not sound. The clock is not yet wired to the engine, nothing
-heard has an arpeggio in it, and every timing rule above is this repository's own decision, so a
-capture that shows the original's step rate, gate or latch behaviour replaces them outright.
+`Tests/SundayKeysCoreTests/ArpeggiatorServiceTests.swift` drives the same clock through the caller:
+the full nine-event sequence of a three-note chord at exact instants; the first step landing on the
+instant of the press and nothing sounding before it; an off preceding an on at a shared instant;
+a release ending the sounding note at the release time with no second off; a second note joining the
+sequence at the next step; nothing at all from an empty held set; a style change on the next step;
+and tempo and division changes after the pending step. It also asserts the rules this repository
+chose: keys passing straight through with the pressed velocity while the arpeggiator is off,
+turning it on with keys held starting the pattern at that instant, and the default sink reaching an
+engine-shaped target.
+
+They prove scheduling, ordering and the wiring, not sound. Nothing heard yet has an arpeggio in it:
+the service is built and tested, but no window and no audio callback constructs it, so a runner can
+prove the events and never the sound. Every timing rule above is this repository's own decision, so
+a capture that shows the original's step rate, gate, latch or switch-off behaviour replaces them
+outright.
