@@ -48,6 +48,12 @@ final class AppModel: ObservableObject {
         ControllerTarget.all(for: layers)
     }
 
+    /// The one set list the window shows and drives. It is the bank's own list, not a
+    /// copy, so stepping here and stepping in a test go through the same model.
+    var setlist: Setlist {
+        bank.setlist
+    }
+
     func start() {
         if !isEngineRunning {
             do {
@@ -90,6 +96,11 @@ final class AppModel: ObservableObject {
         guard id != selectedPatchID, bank.index(of: id) != nil else { return }
         learningTarget = nil
         selectedPatchID = id
+        // Picking a patch keeps the set list honest: if the patch is in the list, the
+        // head moves to its first slot, so the position shown is the sound playing.
+        if let entry = bank.setlist.firstEntry(forPatch: id) {
+            bank.setlist.select(entryID: entry.id)
+        }
         audio.setPatch(patch)
         lastEvent = "patch \(patch.name)"
         bankStatus = "Switched to \(patch.name)"
@@ -119,12 +130,17 @@ final class AppModel: ObservableObject {
         bank.patches.append(copy)
         selectedPatchID = copy.id
         audio.setPatch(copy)
+        // Adding a patch does not silently extend the service; the player adds the
+        // slot deliberately.
         bankStatus = "Added \(copy.name), not saved yet"
     }
 
     func deletePatch(_ id: UUID) {
         guard bank.patches.count > 1, let index = bank.index(of: id) else { return }
         bank.patches.remove(at: index)
+        // Slots that named the deleted patch go with it, and a head that pointed at one
+        // moves to the first slot that is left.
+        bank.setlist.prune(keeping: Set(bank.patches.map { $0.id }))
         if selectedPatchID == id {
             selectedPatchID = bank.patches[min(index, bank.patches.count - 1)].id
             audio.setPatch(patch)
@@ -137,6 +153,76 @@ final class AppModel: ObservableObject {
         guard !trimmed.isEmpty else { return }
         updateSelectedPatch(appliesToEngine: false) { $0.name = trimmed }
         bankStatus = "Renamed to \(trimmed), not saved yet"
+    }
+
+    // MARK: - Set list
+
+    func patchName(forEntry entry: SetlistEntry) -> String {
+        bank.patch(forEntry: entry)?.name ?? "(missing patch)"
+    }
+
+    func isCurrent(_ entry: SetlistEntry) -> Bool {
+        bank.setlist.currentEntryID == entry.id
+    }
+
+    /// Plays one slot. A set list step is a real patch switch: it releases what is
+    /// sounding, so a key held across it cannot hang, and it applies the new patch's
+    /// effects, so no tail is inherited. It is the same call the bank picker makes.
+    func playSetlistEntry(_ entry: SetlistEntry) {
+        guard let patch = bank.patch(forEntry: entry) else {
+            bankStatus = "That slot names a patch this bank does not have"
+            return
+        }
+        bank.setlist.select(entryID: entry.id)
+        learningTarget = nil
+
+        if patch.id != selectedPatchID {
+            selectedPatchID = patch.id
+            audio.setPatch(patch)
+        }
+        lastEvent = "set \(patch.name)"
+        bankStatus = "Set list: \(patch.name)"
+    }
+
+    /// Steps the set list. A bank with no set list steps in bank order, which is what a
+    /// bank written before set lists existed gets.
+    func stepSetlist(by offset: Int) {
+        guard offset != 0 else { return }
+        guard let next = bank.stepSetlist(from: selectedPatchID, by: offset) else {
+            bankStatus = "Nothing to step to"
+            return
+        }
+
+        if let entry = bank.setlist.currentEntry, entry.patchID == next.id {
+            playSetlistEntry(entry)
+            return
+        }
+
+        selectedPatchID = next.id
+        learningTarget = nil
+        audio.setPatch(next)
+        lastEvent = "patch \(next.name)"
+        bankStatus = "Stepped to \(next.name)"
+    }
+
+    func addCurrentPatchToSetlist() {
+        bank.setlist.append(patchID: patch.id)
+        bankStatus = "Added \(patch.name) to the set list, not saved yet"
+    }
+
+    func removeSetlistEntry(_ entryID: UUID) {
+        guard bank.setlist.remove(entryID: entryID) else { return }
+        bankStatus = "Removed a set list slot, not saved yet"
+    }
+
+    func moveSetlistEntry(_ entryID: UUID, by offset: Int) {
+        guard bank.setlist.move(entryID: entryID, by: offset) else { return }
+        bankStatus = "Reordered the set list, not saved yet"
+    }
+
+    func buildSetlistFromBank() {
+        bank.setlist = Setlist.bankOrder(bank.patches, name: bank.setlist.name)
+        bankStatus = "Set list filled from the bank order, not saved yet"
     }
 
     // MARK: - Layer editing
@@ -209,7 +295,7 @@ final class AppModel: ObservableObject {
     func saveBank() {
         do {
             try store.save(bank)
-            bankStatus = "Saved \(bank.patches.count) patch\(bank.patches.count == 1 ? "" : "es")"
+            bankStatus = "Saved \(bank.patches.count) patch\(bank.patches.count == 1 ? "" : "es") and \(bank.setlist.entries.count) set list slot\(bank.setlist.entries.count == 1 ? "" : "s")"
         } catch {
             bankStatus = "Could not save: \(error.localizedDescription)"
         }
@@ -224,9 +310,12 @@ final class AppModel: ObservableObject {
                 return
             }
             bank = loaded
+            // A hand-edited file can name a patch that is not there; the set list is
+            // pruned rather than left with a slot that cannot play.
+            bank.setlist.prune(keeping: Set(bank.patches.map { $0.id }))
             selectedPatchID = first.id
             audio.setPatch(patch)
-            bankStatus = "Loaded \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es")"
+            bankStatus = "Loaded \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es") and \(bank.setlist.entries.count) set list slot\(bank.setlist.entries.count == 1 ? "" : "s")"
         } catch {
             bankStatus = "Could not read the bank: \(error.localizedDescription)"
             audio.setPatch(patch)
