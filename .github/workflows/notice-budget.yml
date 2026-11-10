@@ -1,0 +1,52 @@
+name: notice budget
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  trim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Publish only the message lines
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          p = pathlib.Path('tools/midi_smoke.sh')
+          s = p.read_text()
+
+          old = """\"$log\" | sed 's/ pid=[0-9][0-9]*$//')"""
+          new = """\"$log\" | sed 's/ pid=[0-9][0-9]*$//' | grep -v 'send status')"""
+          if s.count(old) != 1:
+              sys.exit('pipeline anchor found %d times' % s.count(old))
+          s = s.replace(old, new)
+
+          pat = re.compile(r"# Every line the receive probe printed is published before anything is asserted,\s*\n# so a step that fails still carries what the app actually saw:")
+          repl = (
+              "# Every message line the receive probe printed is published before anything is asserted, so\n"
+              "# a step that fails still carries what the app actually saw. GitHub attaches at most ten\n"
+              "# annotations to a step and the three per-send \"send status 0\" lines spent three of them,\n"
+              "# pushing the layer-routing line and the closing verdict out; those status lines are dropped\n"
+              "# here so the message lines fit under the cap:"
+          )
+          if not pat.search(s):
+              sys.exit('comment anchor not found')
+          s = pat.sub(repl, s, count=1)
+
+          p.write_text(s)
+          if "grep -v 'send status'" not in s:
+              sys.exit('filter did not land')
+          print('tools/midi_smoke.sh now %d bytes' % len(s))
+          print('::notice::midi smoke: per-send status notices are no longer published, so the routing line and the closing verdict fit under the ten-annotation cap')
+          PY
+      - name: Commit and push
+        run: |
+          git config user.name WorshipWarehouse
+          git config user.email worshipwarehousesite@gmail.com
+          rm .github/workflows/notice-budget.yml
+          git add -A
+          git commit -m "Publish only the receive message lines as notices [skip ci]"
+          git push
