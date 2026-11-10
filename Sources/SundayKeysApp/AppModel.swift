@@ -68,10 +68,22 @@ final class AppModel: ObservableObject {
     @Published private(set) var licenceStatus = SessionLaunch.unknown(
         "the launch has not asked yet"
     ).line
-    /// Whether the licensed sound set is available this launch. It starts true so that
-    /// a launch with no verdict cannot take away a licence the player holds; only a
-    /// refusal sets it false, and `apply(_:)` is the one place that happens.
-    @Published private(set) var launchAllowsPremiumSounds = true
+
+    /// The decision this launch is actually allowed to act on. It starts as a launch with
+    /// no verdict, which permits playback, so an app that has not asked yet cannot take a
+    /// licence away from the player; `apply(_:)` is the one place it changes.
+    ///
+    /// Every sounding request reads this rather than a Boolean, and the audio controller is
+    /// given the same value, so a refusal cannot be undone by another call site writing a
+    /// flag.
+    @Published private(set) var licenceGate = LicenceGate(.unknown("the launch has not asked yet"))
+
+    /// Whether the licensed sound set is available this launch, as a read of the gate rather
+    /// than a second value to keep in step. A launch with no verdict permits it.
+    var launchAllowsPremiumSounds: Bool {
+        licenceGate.permitsPlayback
+    }
+
     /// The decision itself, so the model keeps the value it applied instead of only the
     /// words it rendered.
     private(set) var launch = SessionLaunch.unknown("the launch has not asked yet")
@@ -105,7 +117,6 @@ final class AppModel: ObservableObject {
         target: audio
     )
     private var meter: Timer?
-
     /// The session seam this launch was given. Nil means the app runs local-first:
     /// no request is made and no licence verdict is invented.
     private let sessionClient: SessionClient?
@@ -156,7 +167,6 @@ final class AppModel: ObservableObject {
             }
         }
         engineStatusLine = statusMessage
-
         midi.onMessage = { [weak self] message in
             Task { @MainActor in self?.handle(message) }
         }
@@ -177,6 +187,9 @@ final class AppModel: ObservableObject {
         // controller keeps the settings across a stop; publishing again here keeps the
         // window and the graph in step on every start.
         audio.setMetronome(click)
+        // The gate is published again on every start because the graph was rebuilt around
+        // it: a launch refused before Start must still be refused after it.
+        audio.setLicenceGate(licenceGate)
     }
 
     func stop() {
@@ -236,12 +249,14 @@ final class AppModel: ObservableObject {
         apply(SessionLaunch.resolve(await sessionClient.fetch(at: now)))
     }
 
-    /// The one place the decision becomes observable state. Both published values come
-    /// from the same `SessionLaunch`, so the line and the permission cannot disagree.
+    /// The one place the decision becomes observable state, and the one place the audio
+    /// controller is told what the launch decided. The line, the gate and the controller's
+    /// copy all come from the same `SessionLaunch`, so they cannot disagree.
     private func apply(_ launch: SessionLaunch) {
         self.launch = launch
         licenceStatus = launch.line
-        launchAllowsPremiumSounds = launch.allowsPremiumSounds
+        licenceGate = LicenceGate(launch)
+        audio.setLicenceGate(licenceGate)
     }
 
     // MARK: - Patches
@@ -595,8 +610,7 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Writes what is playing, best effort.
-    /// It is a hint about the next launch, so a
+    /// Writes what is playing, best effort. It is a hint about the next launch, so a
     /// failed write costs the resume and nothing in the session, and the bank's own save
     /// path never depends on it.
     private func rememberSelection() {
@@ -686,8 +700,16 @@ final class AppModel: ObservableObject {
 
     /// Called by the on-screen keyboard. Notes held by the mouse are tracked so a
     /// drag across keys cannot leave a voice stuck on.
+    ///
+    /// A refused launch is refused here, before the note is tracked as held, and the line
+    /// says so in the window's own event feed. The audio controller refuses too, because a
+    /// stepped arpeggiator note never passes through this method.
     func keyDown(_ note: UInt8, velocity: UInt8 = 100) {
         guard isEngineRunning, !heldNotes.contains(note) else { return }
+        guard licenceGate.permitsPlayback else {
+            lastEvent = "refused \(noteName(note)): \(licenceGate.line)"
+            return
+        }
         heldNotes.insert(note)
         audio.noteOn(note: note, velocity: velocity)
         lastEvent = "key \(noteName(note)) on"
@@ -750,7 +772,14 @@ final class AppModel: ObservableObject {
 /// arrives through the router, so the count and the line in the window are the same
 /// numbers the delivery produced.
 extension AppModel: MIDIEventTransport {
+    /// A controller note asks the same gate the keys do, and a refusal is recorded in the
+    /// event line rather than played, so an expired or unreadable standing is audible as
+    /// silence and readable as a refusal.
     func noteOn(note: UInt8, velocity: UInt8, channel: UInt8) {
+        guard licenceGate.permitsPlayback else {
+            lastEvent = "refused note \(noteName(note)) ch \(channel + 1): \(licenceGate.line)"
+            return
+        }
         audio.noteOn(note: note, velocity: velocity)
         lastEvent = "note on \(noteName(note)) velocity \(velocity) ch \(channel + 1)"
     }
