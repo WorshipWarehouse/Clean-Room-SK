@@ -102,8 +102,11 @@ public struct SessionStanding: Equatable, Sendable {
     }
 }
 
-public enum SessionScope {
-    /// Applies the licence rule and the entitlement counts to one decoded payload.
+/// The session-level rule: licence standing plus the entitlement counts, from one payload.
+///
+/// Named `SessionGate` rather than `SessionScope` because `SessionScope` in `SessionMemory.swift`
+/// already means "which patch a launch opens"; this is a different question about the same word.
+public enum SessionGate {
     public static func standing(for payload: SessionPayload, at now: Date = Date()) -> SessionStanding {
         SessionStanding(
             licence: LicenceScope.standing(
@@ -137,9 +140,9 @@ public enum SessionDecodingError: Error, Equatable, Sendable {
 /// Section 13 records the envelope itself: successes carry `data`, failures carry `error`, as
 /// `APIResponse` and `ErrorApi` store exactly one of those. The key casing and the date strategy
 /// are Unknown (section 12), so this reader accepts both the camelCase property names the
-/// metadata records and their snake_case spellings, and accepts the four date shapes recorded
-/// in `LicenceDate`. All of that is an assumption with a name, not a guess hidden in the code:
-/// when a capture arrives, this reader is replaced by a configured `JSONDecoder`.
+/// metadata records and their snake_case spellings, and accepts the four date shapes recorded in
+/// `LicenceDate`. All of that is an assumption with a name, not a guess hidden in the code: when a
+/// capture arrives, this reader is replaced by a configured `JSONDecoder`.
 public enum SessionDocument {
     public static func decode(_ data: Data) -> Result<SessionPayload, SessionDecodingError> {
         guard let root = try? JSONSerialization.jsonObject(with: data, options: []) else {
@@ -195,8 +198,9 @@ public enum SessionDocument {
 
 /// Field lookup that tolerates both spellings of every key.
 ///
-/// A variadic forwarder would have to splat; taking an array keeps the call sites terse without
-/// relying on that, and `null` is filtered here so a JSON `null` reads like an absent key.
+/// A variadic forwarder would have to splat, so the internal lookup takes an array and the call
+/// sites keep their terse variadic spelling. A JSON `null` is filtered here, so it reads like an
+/// absent key rather than as a value the reader has to special-case.
 struct FieldReader {
     let object: [String: Any]
 

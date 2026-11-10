@@ -9,9 +9,9 @@ asset was copied into `Sources/` or `Tests/`.
 
 The queued decompilation targets (`Audio.KeyboardVelocityScaling`, `Audio.LayerRangeLimit`,
 Realm MIDI-learn tables, `Audio.SamplerPlugin`, the rotor/chorus/delay ranges) all need the
-analysis host, which is still unreachable: see `docs/re/access-determination.md`. M1 is the
-one milestone the plan marks as ready, because its model is fully reconstructed already, and
-every later milestone depends on the gating it exposes.
+analysis host, which is still unreachable: see `docs/re/access-determination.md`. M1 is the one
+milestone the plan marks as ready, because its model is fully reconstructed already, and every
+later milestone depends on the gating it exposes.
 
 ## Evidence used, and what it fixes
 
@@ -44,9 +44,12 @@ every later milestone depends on the gating it exposes.
 - `SessionPayload`, `UserRole`, `AccessibleProduct`, `SessionEntitlements`, `SessionStanding`.
 - `SessionDocument.decode`, which reads the `{data}` / `{error}` envelope and accepts both key
   spellings, because the key strategy is Unknown.
+- `SessionGate.standing(for:at:)`, the session-level rule. It is not called `SessionScope`
+  because that name already means "which patch a launch opens" in `SessionMemory.swift`; the
+  first CI run caught that redeclaration and the type was renamed rather than the existing one.
 - `SessionEntitlements.backupAllowed(existingBackups:)` and `audioOutputAllowed(index:)`.
 
-`Tests/SundayKeysCoreTests/LicenceSessionTests.swift` - 22 assertions across 5 test classes.
+`Tests/SundayKeysCoreTests/LicenceSessionTests.swift` - five test classes covering the list below.
 
 ## Rules this implementation chooses (assumptions, replaceable)
 
@@ -85,7 +88,7 @@ it, which is why each rule is asserted with an exact `line` and an exact `access
   failures, not crashes and not empty sessions;
 - all three statuses, the fifth case of a grace window that has closed, and both non-readings;
 - entitlement gating at 0, at the maximum, above it and at a negative index;
-- `SessionScope.standing` combining licence and entitlements on a real payload.
+- `SessionGate.standing` combining licence and entitlements on a real payload.
 
 ## Not done here, and deliberately not claimed
 

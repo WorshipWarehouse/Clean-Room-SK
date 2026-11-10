@@ -103,7 +103,12 @@ final class SessionDocumentTests: XCTestCase {
             }
             let endsAt = payload.licence.licence?.gracePeriodEndsAt
             XCTAssertNotNil(endsAt, "no grace end read from \(shape)")
-            XCTAssertEqual(endsAt?.timeIntervalSince1970 ?? 0, 1_768_003_200, accuracy: 1, "shape \(shape)")
+            XCTAssertEqual(
+                endsAt?.timeIntervalSince1970 ?? 0,
+                1_768_003_200,
+                accuracy: 1,
+                "shape \(shape)"
+            )
         }
     }
 
@@ -240,7 +245,10 @@ final class LicenceStandingTests: XCTestCase {
 
         XCTAssertEqual(standing.access, .downgraded)
         XCTAssertEqual(standing.warning, .expired)
-        XCTAssertEqual(standing.line, "Licence could not be read: unknown licence status \"trialing\"")
+        XCTAssertEqual(
+            standing.line,
+            "Licence could not be read: unknown licence status \"trialing\""
+        )
     }
 }
 
@@ -279,7 +287,7 @@ final class SessionEntitlementTests: XCTestCase {
     }
 }
 
-final class SessionStandingTests: XCTestCase {
+final class SessionGateTests: XCTestCase {
     func testStandingCombinesLicenceAndEntitlements() {
         let payload = SessionPayload(
             maxAvailableBackups: 2,
@@ -289,7 +297,7 @@ final class SessionStandingTests: XCTestCase {
             accessibleProducts: [AccessibleProduct(productID: "prod-1")]
         )
 
-        let standing = SessionScope.standing(
+        let standing = SessionGate.standing(
             for: payload,
             at: Date(timeIntervalSince1970: 1_768_003_200)
         )
