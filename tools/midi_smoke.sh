@@ -130,7 +130,9 @@ connected="$(grep -oE 'SundayKeysApp: MIDI probe: connected [0-9]+ of' "$log" | 
 [[ -n "$connected" ]] || fail "the connect probe did not report how many sources the port connected"
 [[ "$connected" -ge 1 ]] || fail "the engine enumerated $enumerated source(s) but the port connected none of them"
 
-midi_status="$(sed -n 's/^SundayKeysApp: MIDI probe: status: //p' "$log" | head -n 1)"
+# The marker stream appends ` pid=<n>` to every line, so the status is stripped
+# of it before it is compared, printed and published.
+midi_status="$(sed -n 's/^SundayKeysApp: MIDI probe: status: //p' "$log" | sed 's/ pid=[0-9][0-9]*$//' | head -n 1)"
 [[ -n "$midi_status" ]] || fail "the connect probe did not report a MIDI status"
 [[ "$midi_status" =~ ^MIDI\ ready,\ [1-9][0-9]*\ of\ [1-9][0-9]*\ source\(s\)\ connected$ ]] \
   || fail "the MIDI status does not report a connected source: $midi_status"
