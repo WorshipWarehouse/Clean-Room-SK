@@ -4,6 +4,10 @@ name: record-click
 # commit, delete itself. tools/record_click.py asserts every run it cites and every
 # anchor it patches, so a red run or a moved anchor fails the job instead of
 # writing a guess, and nothing is committed unless swift build passes first.
+#
+# Both python steps pipe their output through tee and re-emit the tail as check-run
+# annotations, so a failure is readable through the API instead of only in a log
+# archive that has to be unpacked.
 on:
   workflow_dispatch:
     inputs:
@@ -32,7 +36,14 @@ jobs:
           CLICK_RUN_ID: ${{ inputs.click_run_id || '42824933210' }}
         run: |
           set -o pipefail
-          python3 tools/record_click.py
+          python3 tools/record_click.py 2>&1 | tee /tmp/record.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -30 /tmp/record.log | tr -d '\r' | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::${line}"
+            done
+          fi
+          exit "$status"
 
       - name: Prove the patched tree builds
         run: |
@@ -49,4 +60,11 @@ jobs:
       - name: Commit
         run: |
           set -o pipefail
-          python3 tools/commit_record.py
+          python3 tools/commit_record.py 2>&1 | tee /tmp/commit.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -30 /tmp/commit.log | tr -d '\r' | while IFS= read -r line; do
+              [ -n "$line" ] && echo "::error::${line}"
+            done
+          fi
+          exit "$status"
