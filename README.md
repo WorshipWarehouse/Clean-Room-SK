@@ -16,8 +16,8 @@ Nothing here is produced by executing the original app, and no original source w
 | bundled app | `tools/bundle_app.sh` assembles and ad-hoc signs `SundayKeys.app`; CI lints the plist and verifies the signature on every push |
 | launched in CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, watches the run loop service a timer, and sees a status 0 exit; no person has seen the window |
 | audio started in CI | the runner presses Start from inside the app, the graph opens on its default output device, plays a note and the render block reports a rendered voice; a machine with no output device is a typed error rather than a crash |
-| MIDI started in CI | the runner creates a CoreMIDI client and an input port from inside the app and enumerates the source list; that runner has no source, and the step says so instead of hiding it |
-| not yet verified on hardware | no controller has ever been connected, nothing has been listened to, and no person has seen the window |
+| MIDI connected in CI | the runner creates a CoreMIDI client and an input port, enumerates the source list, then publishes a virtual source of its own and lets the engine's own enumeration find it and connect it; the status reads `MIDI ready, 1 of 1 source(s) connected`, and a start with no source still says so instead of hiding it |
+| not yet verified on hardware | no controller has ever been connected, nothing has been sent from the virtual source, nothing has been listened to, and no person has seen the window |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -48,7 +48,9 @@ dispatch references over 2,527 descriptors.
 | `tools/bundle_app.sh` | assembles, signs and verifies `SundayKeys.app` from the release build |
 | `tools/launch_smoke.sh` | starts the bundle, asserts its startup markers and a clean exit, and fails with the captured output otherwise |
 | `tools/audio_smoke.sh` | presses Start inside the app, requires a rendered voice and a clean exit, and reports a missing output device as a limitation |
-| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, requires the client marker and a source count, and reports a machine with no source as a limitation |
+| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, publishes a virtual source, requires the engine to enumerate and connect it, and reports a machine with no source as a limitation |
+| `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift` | classifies what a connect attempt against the probe's own virtual source proved |
+| `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift` | publishes, and then disposes, the virtual CoreMIDI source the connect probe connects to |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
 
 ## Build and run the app
@@ -300,6 +302,29 @@ CoreMIDI client and input port were created on the runner and `MIDIGetNumberOfSo
 The connect path was not exercised, because there was nothing to connect: that is what a controller
 attached to a real Mac is for, and it has not happened.
 
+### Connecting without a controller
+
+The runner has no controller, so for a long time the connect call itself had never run: the client and
+port were created, `MIDIGetNumberOfSources` returned zero and the step said so.
+`SUNDAYKEYS_PROBE_MIDI_CONNECT=1` closes that: the app creates a virtual source with
+`MIDISourceCreateWithProtocol` before starting the engine, so the engine's own enumeration finds it,
+its port connects it and the status it derives reads `MIDI ready, 1 of 1 source(s) connected`.
+
+- `MIDIConnectProbe` in the core module names the outcome - connected, refused by the port, no client
+  or port, no source published, never enumerated, listed but never attempted - with its own exit
+  status (0, 6, 4/5, 7, 8, 9) and its own line, so a green step can only mean the port accepted the
+  source.
+- the probe prints the ordinary report lines as well as its own, so both probes read the same
+  markers, and it disposes the source and its client afterwards.
+- `tools/midi_smoke.sh` treats a missing or unlisted source as a failure, and it still publishes the
+  start probe's no-sources warning, because that is the machine's hardware answer rather than a pass.
+
+Run [`42740507134`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) on
+`7d5cd17` is the first green run of it: all fifteen steps passed and the step published "MIDI
+connect probe: virtual source created, engine enumerated 1 source(s), connected 1, status: MIDI
+ready, 1 of 1 source(s) connected". Nothing has been sent from that source yet, so the receive path
+is next.
+
 ## Reproduce the analysis
 
 Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the app binary.
@@ -353,13 +378,13 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
 - The bundle is assembled, signed, checked, started and given an audio graph and a MIDI client on the
-  runner, but no person has seen its window: nothing has been listened to, no controller has been
-  connected, and the MIDI connect path has never run against a real source. No local build has been
-  run; every result comes from the macOS runner.
+runner, but no person has seen its window: nothing has been listened to, no controller has been
+  connected, nothing has been sent from the virtual source, and no local build has been run; every
+  result comes from the macOS runner.
 - The set list panel, the effects panel and the controller panel have never been looked at on a
   screen.
-- `AppModel.start()` discards the MIDI start verdict, so a client that cannot be created is still
-  silent in the window; the service returns it and nothing shows it.
+- The MIDI status is published by the model and refreshed on every source-list change, but the app
+  target has no view test and nobody has read the line on screen.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
   independently licensed or recorded material.
 
