@@ -74,8 +74,9 @@ final class AppModel: ObservableObject {
 
     // MARK: - Patches
 
-    /// Switching patch swaps routing and timbres and releases what is sounding, so
-    /// a key held through the switch cannot hang on a layer the new patch dropped.
+    /// Switching patch swaps routing, timbres and effects and releases what is
+    /// sounding, so a key held through the switch cannot hang on a layer the new
+    /// patch dropped.
     func selectPatch(_ id: UUID) {
         guard id != selectedPatchID, bank.index(of: id) != nil else { return }
         selectedPatchID = id
@@ -154,6 +155,19 @@ final class AppModel: ObservableObject {
 
     func setLayerUpper(_ layerID: UInt8, note: UInt8) {
         editLayer(layerID) { $0.range = NoteRange(lower: $0.range.lower, upper: note) }
+    }
+
+    // MARK: - Effects
+
+    /// Effect edits take the live-edit path: the patch's settings are republished to
+    /// the render thread and no voice is released, so an effect can be switched on or
+    /// a mix moved while a chord is held. It is the same distinction `setPatch` makes
+    /// between switching patch and editing the patch that is already playing.
+    func updateEffects(_ transform: (inout EffectsSettings) -> Void) {
+        updateSelectedPatch { patch in
+            transform(&patch.effects)
+        }
+        bankStatus = "Edited effects on \(patch.name), not saved yet"
     }
 
     // MARK: - Persistence

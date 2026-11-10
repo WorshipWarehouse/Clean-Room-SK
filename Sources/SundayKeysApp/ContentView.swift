@@ -37,6 +37,8 @@ struct ContentView: View {
 
             patchSection
 
+            effectsSection
+
             KeyboardView(model: model)
                 .frame(height: 150)
 
@@ -54,7 +56,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(24)
-        .frame(minWidth: 900, minHeight: 640)
+        .frame(minWidth: 900, minHeight: 760)
     }
 
     private var patchSection: some View {
@@ -109,6 +111,196 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 4)
+        }
+    }
+
+    private var effectsSection: some View {
+        GroupBox("Effects") {
+            VStack(alignment: .leading, spacing: 8) {
+                eqRow
+                chorusRow
+                delayRow
+                reverbRow
+
+                Text("Effect edits apply to the playing patch without releasing a held note; Save keeps them.")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private func effectRow<Controls: View>(
+        title: String,
+        toggle: Binding<Bool>,
+        @ViewBuilder controls: () -> Controls
+    ) -> some View {
+        HStack(spacing: 10) {
+            Toggle("", isOn: toggle)
+                .labelsHidden()
+                .toggleStyle(.checkbox)
+
+            Text(title)
+                .frame(width: 64, alignment: .leading)
+                .font(.system(.callout, design: .monospaced))
+
+            controls()
+                .disabled(!toggle.wrappedValue)
+
+            Spacer()
+        }
+    }
+
+    private var eqRow: some View {
+        effectRow(
+            title: "EQ",
+            toggle: Binding(
+                get: { model.patch.effects.eq.enabled },
+                set: { value in model.updateEffects { $0.eq.enabled = value } }
+            )
+        ) {
+            Text("low")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.eq.lowGain) },
+                    set: { value in model.updateEffects { $0.eq.lowGain = Float(value) } }
+                ),
+                in: -12...12
+            )
+            .frame(width: 120)
+            Text(String(format: "%+.1f dB", model.patch.effects.eq.lowGain))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 66, alignment: .trailing)
+
+            Text("high")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.eq.highGain) },
+                    set: { value in model.updateEffects { $0.eq.highGain = Float(value) } }
+                ),
+                in: -12...12
+            )
+            .frame(width: 120)
+            Text(String(format: "%+.1f dB", model.patch.effects.eq.highGain))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 66, alignment: .trailing)
+        }
+    }
+
+    private var chorusRow: some View {
+        effectRow(
+            title: "Chorus",
+            toggle: Binding(
+                get: { model.patch.effects.chorus.enabled },
+                set: { value in model.updateEffects { $0.chorus.enabled = value } }
+            )
+        ) {
+            Text("mix")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.chorus.mix) },
+                    set: { value in model.updateEffects { $0.chorus.mix = Float(value) } }
+                ),
+                in: 0...1
+            )
+            .frame(width: 120)
+            Text(String(format: "%.2f", model.patch.effects.chorus.mix))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 42, alignment: .trailing)
+
+            Text("rate")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.chorus.rate) },
+                    set: { value in model.updateEffects { $0.chorus.rate = Float(value) } }
+                ),
+                in: 0.05...6
+            )
+            .frame(width: 120)
+            Text(String(format: "%.2f Hz", model.patch.effects.chorus.rate))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 66, alignment: .trailing)
+        }
+    }
+
+    private var delayRow: some View {
+        effectRow(
+            title: "Delay",
+            toggle: Binding(
+                get: { model.patch.effects.delay.enabled },
+                set: { value in model.updateEffects { $0.delay.enabled = value } }
+            )
+        ) {
+            Text("mix")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.delay.mix) },
+                    set: { value in model.updateEffects { $0.delay.mix = Float(value) } }
+                ),
+                in: 0...1
+            )
+            .frame(width: 120)
+            Text(String(format: "%.2f", model.patch.effects.delay.mix))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 42, alignment: .trailing)
+
+            Text("time")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.delay.time) },
+                    set: { value in model.updateEffects { $0.delay.time = Float(value) } }
+                ),
+                in: 0.02...1.2
+            )
+            .frame(width: 120)
+            Text(String(format: "%.3f s", model.patch.effects.delay.time))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 66, alignment: .trailing)
+        }
+    }
+
+    private var reverbRow: some View {
+        effectRow(
+            title: "Reverb",
+            toggle: Binding(
+                get: { model.patch.effects.reverb.enabled },
+                set: { value in model.updateEffects { $0.reverb.enabled = value } }
+            )
+        ) {
+            Text("mix")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.reverb.mix) },
+                    set: { value in model.updateEffects { $0.reverb.mix = Float(value) } }
+                ),
+                in: 0...1
+            )
+            .frame(width: 120)
+            Text(String(format: "%.2f", model.patch.effects.reverb.mix))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 42, alignment: .trailing)
+
+            Text("decay")
+                .font(.system(.caption, design: .monospaced))
+            Slider(
+                value: Binding(
+                    get: { Double(model.patch.effects.reverb.decay) },
+                    set: { value in model.updateEffects { $0.reverb.decay = Float(value) } }
+                ),
+                in: 0...1
+            )
+            .frame(width: 120)
+            Text(String(format: "%.2f", model.patch.effects.reverb.decay))
+                .font(.system(.caption, design: .monospaced))
+                .frame(width: 42, alignment: .trailing)
         }
     }
 }

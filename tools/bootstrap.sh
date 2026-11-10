@@ -10,8 +10,11 @@
 #   tools/bootstrap.sh            verify, then install what is missing
 #   tools/bootstrap.sh --check    verify only, exit non-zero if anything is absent
 #
-# This script has not been executed yet. Treat it as unverified until it runs
-# once on the build machine; it is deliberately written to fail closed.
+# Verification status: the --check path runs on the macOS runner in
+# .github/workflows/build.yml, so its reporting and exit codes are exercised on
+# every push. The install path is not exercised anywhere: it installs Homebrew
+# casks and needs sudo, so it is left to a developer machine. Treat the install
+# path as unverified until it has been run once there.
 
 set -euo pipefail
 
@@ -40,28 +43,28 @@ fi
 
 # 2. Full Xcode, needed to build and test the app
 if [[ -d /Applications/Xcode.app ]]; then
-  note "xcode" "$(/usr/bin/xcodebuild -version 2>/dev/null | head -1)"
+  note "xcode" "$(xcodebuild -version 2>/dev/null | head -1 || true)"
 else
   report_missing "xcode" "install Xcode from the App Store"
 fi
 
 # 3. Swift toolchain
 if has swift; then
-  note "swift" "$(swift --version 2>/dev/null | head -1)"
+  note "swift" "$(swift --version 2>/dev/null | head -1 || true)"
 else
   report_missing "swift" "install Xcode, which provides swift and swiftc"
 fi
 
 # 4. Homebrew
 if has brew; then
-  note "homebrew" "$(brew --version | head -1)"
+  note "homebrew" "$(brew --version 2>/dev/null | head -1 || true)"
 else
   report_missing "homebrew" "run the installer from brew.sh"
 fi
 
 # 5. Java, needed for headless Ghidra
 if has java; then
-  note "java" "$(java -version 2>&1 | head -1)"
+  note "java" "$(java -version 2>&1 | head -1 || true)"
 else
   report_missing "java" "brew install --cask temurin"
 fi

@@ -6,24 +6,59 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# A newer push supersedes the older run: the branch tip is what has to be green.
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   macos:
     runs-on: macos-15
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: Toolchain
-        run: swift --version
+      - name: Report the toolchain
+        run: |
+          set -o pipefail
+          xcode-select -p
+          xcodebuild -version || true
+          swift --version
+          xcrun --find swift
 
-      - name: Build
+      - name: Cache the build directory
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-swift-${{ hashFiles('Package.swift') }}-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-swift-${{ hashFiles('Package.swift') }}-
+
+      - name: Resolve dependencies
+        run: |
+          set -o pipefail
+          swift package resolve
+          swift package show-dependencies
+
+      - name: Build (debug, with tests)
         run: |
           set -o pipefail
           swift build --build-tests -v 2>&1 | tee /tmp/build.log
 
+      - name: Report warnings
+        if: success()
+        run: |
+          { grep -E "warning:" /tmp/build.log || true; } | sort -u | head -n 20 | while IFS= read -r line; do
+            echo "::warning::$line"
+          done
+
       - name: Report build diagnostics
         if: failure()
         run: |
-          grep -E "error:" /tmp/build.log | head -n 25 | while IFS= read -r line; do
+          { grep -E "error:" /tmp/build.log || true; } | head -n 25 | while IFS= read -r line; do
             echo "::error::$line"
           done
 
@@ -35,6 +70,35 @@ jobs:
       - name: Report test diagnostics
         if: failure()
         run: |
-          grep -E "error:|XCTAssert|failed" /tmp/test.log | head -n 25 | while IFS= read -r line; do
+          { grep -E "error:|XCTAssert|failed" /tmp/test.log || true; } | head -n 25 | while IFS= read -r line; do
             echo "::error::$line"
           done
+
+      - name: Build (release)
+        if: success()
+        run: |
+          set -o pipefail
+          swift build -c release
+
+      # The bootstrap script documents the toolchain this package needs. Only its
+      # --check path can run unattended: the install path would need Homebrew
+      # casks and sudo, so it is left to the developer machine.
+      - name: Verify the bootstrap script
+        if: success()
+        run: |
+          set -o pipefail
+          status=0
+          bash tools/bootstrap.sh --check > /tmp/bootstrap.log 2>&1 || status=$?
+          cat /tmp/bootstrap.log
+          if [ "$status" -ne 0 ] && [ "$status" -ne 1 ]; then
+            echo "::error::bootstrap.sh --check exited with $status, expected 0 (all present) or 1 (tools missing)"
+            exit 1
+          fi
+          grep -q "Sunday Keys clean room toolchain" /tmp/bootstrap.log || {
+            echo "::error::bootstrap.sh did not print its header"
+            exit 1
+          }
+          grep -q "swift" /tmp/bootstrap.log || {
+            echo "::error::bootstrap.sh did not inspect the Swift toolchain"
+            exit 1
+          }
