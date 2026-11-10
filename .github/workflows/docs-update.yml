@@ -1,0 +1,286 @@
+name: docs-update
+
+# One-shot recorder. The agent works through the GitHub API while the local Mac is
+# unreachable, and docs/progress.md is far larger than that API can replace in one
+# call, so the edits are applied here from asserted anchors and pushed from the
+# runner. Deleted again once the record is written.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Apply the recorded edits
+        run: |
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          def load(path):
+              return pathlib.Path(path).read_text().split("\n")
+
+          def save(path, lines):
+              pathlib.Path(path).write_text("\n".join(lines))
+
+          def row_index(lines, anchor):
+              matches = [i for i, line in enumerate(lines) if line.startswith(anchor)]
+              if len(matches) != 1:
+                  sys.exit(f"expected exactly one line starting {anchor!r}, found {len(matches)}")
+              return matches[0]
+
+          def heading_index(lines, heading):
+              matches = [i for i, line in enumerate(lines) if line.strip() == heading]
+              if len(matches) != 1:
+                  sys.exit(f"expected exactly one heading {heading!r}, found {len(matches)}")
+              return matches[0]
+
+          def insert_before_row(lines, anchor, rows):
+              i = row_index(lines, anchor)
+              lines[i:i] = rows
+
+          def insert_at_table_end(lines, next_heading, rows):
+              i = heading_index(lines, next_heading)
+              j = i
+              while j > 0 and lines[j - 1].strip() == "":
+                  j -= 1
+              lines[j:j] = rows
+
+          def insert_before_heading(lines, heading, block):
+              i = heading_index(lines, heading)
+              lines[i:i] = block + [""]
+
+          def replace_rows(lines, block, start_heading, end_heading):
+              i = heading_index(lines, start_heading)
+              k = heading_index(lines, end_heading)
+              if k <= i:
+                  sys.exit(f"{end_heading!r} comes before {start_heading!r}")
+              lines[i:k] = block
+
+          def replace_row(lines, anchor, new_line):
+              lines[row_index(lines, anchor)] = new_line
+
+          def replace_until_next_marker(lines, anchor, new_lines):
+              i = row_index(lines, anchor)
+              j = i + 1
+              while j < len(lines) and not lines[j].startswith("- ") and not lines[j].startswith("## "):
+                  j += 1
+              lines[i:j] = new_lines
+
+          PHASE_ROW = (
+              "| Build, MIDI connect | the port's connect loop runs on a machine with no hardware: the probe "
+              "publishes a virtual source, the engine enumerates it, the port connects it and the status says so "
+              "| `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift`, "
+              "`Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift`, run `42740507134` |"
+          )
+
+          MILESTONE = [
+              "## MIDI connect milestone: the connect path runs with no hardware",
+              "",
+              "The status followed the source list, but the connect call itself had still never run anywhere: the",
+              "runner creates the client and the port, enumerates zero sources and says so. That was next action",
+              "2, and it is now done.",
+              "",
+              "- **The probe publishes the source it connects to.** With",
+              "  `SUNDAYKEYS_PROBE_MIDI_CONNECT=1` the app creates a CoreMIDI client and a virtual source with",
+              "  `MIDISourceCreateWithProtocol` before it starts the engine, so the engine's own",
+              "  `MIDIGetNumberOfSources` finds that endpoint and its `MIDIPortConnectSource` runs against a live",
+              "  source with no controller attached. `VirtualMIDISource` is the only place those calls live, and it",
+              "  disposes the source and its client afterwards.",
+              "- **The classification is core logic.** `MIDIConnectProbe` names what happened: the port connected",
+              "  the probe's own source, the port refused it, the start never created a client or port, the system",
+              "  would not publish a source, the engine never listed it, or it was listed but never attempted.",
+              "  Each has its own exit status (0, 6, 4 or 5, 7, 8, 9) and its own line, and the status it prints is",
+              "  derived through `MIDIStatus`, so the probe cannot disagree with what pressing Start would show.",
+              "- **A late listing is not a missing source.** If the engine's first enumeration misses the source the",
+              "  probe just created, `MIDIInputService.refresh()` takes one more pass before the verdict is fixed.",
+              "- **The step proves the connect rather than assuming it.** `tools/midi_smoke.sh` runs two probes.",
+              "  The start probe is unchanged and still publishes the no-sources warning on a machine with nothing",
+              "  attached, so the hardware claim stays honest. The connect probe fails the step unless the app",
+              "  reports the virtual source created, the engine enumerating at least one source, the port connecting",
+              "  at least one, and a status of the form `MIDI ready, N of M source(s) connected`; the counts and the",
+              "  status are also published as a notice annotation, because the job log download stops before the",
+              "  later steps.",
+              "- **What the tests pin.** `MIDIConnectProbeTests` drives the same tracker loop the service runs: a",
+              "  source the engine enumerates and the port connects proves the path; a refused connect is reported",
+              "  as a refusal, not a connection; a system that will not publish a source leaves the path unproven; a",
+              "  source the engine never lists is a failure rather than a quiet no-sources state; a listed but never",
+              "  attempted source is reported as idle; a client that cannot be created is still reported; and the",
+              "  six outcomes have six distinct exit statuses and six distinct lines.",
+              "",
+              "- **Observed.** Run",
+              "  [`42740507134`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) on",
+              "  `7d5cd17`: the macos job succeeded and all fifteen steps were green. Debug build with tests",
+              "  02:07:20 to 02:07:51, warnings at 02:07:51, `swift test` 02:07:51 to 02:07:54, release build",
+              "  02:07:54 to 02:08:10, bundle 02:08:10 to 02:08:13, launch step 12 02:08:13 to 02:08:21, audio step",
+              "  13 02:08:21 to 02:08:24, MIDI step 14 02:08:24 to 02:08:27, bootstrap step 15 02:08:27 to",
+              "  02:08:29, job completed 02:08:35. The MIDI step published a notice annotation reading \"MIDI",
+              "  connect probe: virtual source created, engine enumerated 1 source(s), connected 1, status: MIDI",
+              "  ready, 1 of 1 source(s) connected\", so on this runner the app published a virtual CoreMIDI source,",
+              "  its own enumeration found one source, its port connected one and the status line it derived says a",
+              "  source is connected. The same run carried the start probe's warning, \"this machine has no MIDI",
+              "  sources: the start probe proved the client and input port were created and the source list was",
+              "  empty\", which is that machine's hardware answer and not a pass. Four annotations in all: the",
+              "  connect notice, the start probe's warning, the SwiftPM manifest warning and the capacity notice.",
+              "- **Three failed attempts, all mine.** Run `42739979656` on `78ce36e` failed in the debug build with",
+              "  \"value of type 'MIDIConnectProbe' has no member 'exitCode'\", because the status was defined on",
+              "  the outcome and the probe did not forward it. Run `42740177399` on `5a2e4c6` built and then failed",
+              "  one new test that expected 4 for a refused input port where the existing failure type says 5, so",
+              "  the expectation was corrected in `7b8567f`. Run `42740337754` on `7b8567f` is the run that proved",
+              "  the connect first: its MIDI step failed and the annotation it published reads \"the MIDI status",
+              "  does not report a connected source: MIDI ready, 1 of 1 source(s) connected pid=2111\", so the",
+              "  probe had created, enumerated and connected its own source and only the script's comparison was",
+              "  wrong, because the marker stream appends its pid to every line. That parse is fixed in `7d5cd17`.",
+              "",
+              "What this does not prove: that anything is ever sent from the source. The port holds a source the",
+              "app published itself, so the receive path and a real controller's messages are still unexercised,",
+              "and no person has seen the status line or heard a note.",
+          ]
+
+          NEXT_ACTIONS = [
+              "## Next actions, in order",
+              "",
+              "1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, read the",
+              "   MIDI status line, press Start against a real output device, plug in a controller, watch the status",
+              "   and the source list change, click through the patch, set list, effects and mapping panels, and",
+              "   listen to the effects chain. This is the only step that needs a person listening, and it is the",
+              "   only way to know that macOS actually delivers the source notification.",
+              "2. Send from the virtual source. The port now connects a source the probe published, but nothing has",
+              "   ever been sent through it, so the receive path, `MIDIMessage.parse` and the layer routing that",
+              "   follows a note have never run from a real MIDI packet. `MIDIReceived` on that source, with the",
+              "   engine counting the notes it decoded, is the next hardware-independent step and the last one before",
+              "   a controller is needed.",
+              "3. MIDI refinements that need hardware: relative encoders, a foot switch, a controller that sends on",
+              "   several channels, and a controller refused by the port at runtime, which is the one refusal path",
+              "   the tracker's tests can only simulate.",
+              "4. Put the published `midiStatus` on the MIDI panel itself, so the panel says the status next to the",
+              "   source names. This waits for a way to test the view; the model already publishes the value.",
+              "5. Session scope beyond one ordered list, once there is evidence for it: the original app's session",
+              "   contents are **Unknown**, so the next step is a capture or a decompiled session type, not a guess.",
+              "6. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,",
+              "   `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,",
+              "   `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and",
+              "   commit the extracts under `docs/re/` with provenance.",
+              "",
+          ]
+
+          RUN_ROWS = [
+              "| `0d3f376` | [42737489752](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42737489752) | success: the source-tracking write-up, with no code change to the tree above. Build 01:41:00 to 01:41:17, warnings at 01:41:17, tests 01:41:17 to 01:41:21, release 01:41:21 to 01:41:34, bundle 01:41:34 to 01:41:36, launch step 12 01:41:36 to 01:41:42, audio step 13 01:41:42 to 01:41:44, MIDI step 14 01:41:44 to 01:41:45, bootstrap step 15 01:41:45 to 01:41:47, job completed 01:41:51. Three annotations: the capacity notice, the manifest warning and the MIDI probe's no-sources warning. |",
+              "| `78ce36e` | [42739979656](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42739979656) | failure in the debug build: \"value of type 'MIDIConnectProbe' has no member 'exitCode'\". The status was defined on the outcome and the probe did not forward it; fixed in `5a2e4c6`. |",
+              "| `5a2e4c6` | [42740177399](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740177399) | failure in the tests: `testEveryProbeOutcomeHasItsOwnExitStatusAndLine` expected 4 for a refused input port where `MIDIStartFailure` says 5. The expectation was wrong, not the status; fixed in `7b8567f`. |",
+              "| `7b8567f` | [42740337754](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740337754) | failure in the MIDI step, after build, tests, release, bundle, launch (02:06:22 to 02:06:27) and audio (02:06:27 to 02:06:29) passed. The step's annotation reads \"the MIDI status does not report a connected source: MIDI ready, 1 of 1 source(s) connected pid=2111\", so the probe had created, enumerated and connected its own source and only the script's comparison failed on the pid suffix. Fixed in `7d5cd17`. |",
+              "| `7d5cd17` | [42740507134](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) | success: `MIDIConnectProbe`, `VirtualMIDISource`, `MIDIInputService.refresh()`, the connect probe and `MIDIConnectProbeTests`. Build 02:07:20 to 02:07:51, warnings at 02:07:51, tests 02:07:51 to 02:07:54, release 02:07:54 to 02:08:10, bundle 02:08:10 to 02:08:13, launch step 12 02:08:13 to 02:08:21, audio step 13 02:08:21 to 02:08:24, MIDI step 14 02:08:24 to 02:08:27, bootstrap step 15 02:08:27 to 02:08:29, job completed 02:08:35. A notice annotation records the proof: virtual source created, one source enumerated, one connected, status `MIDI ready, 1 of 1 source(s) connected`. The start probe's no-sources warning was published in the same run, and there were four annotations in all. |",
+          ]
+
+          DECISION_ROWS = [
+              "| the connect probe publishes its own source instead of skipping the step | the runner has no controller, so skipping would leave the connect call unexercised for ever; a virtual source is a real endpoint the system publishes, and the deprecated create call is avoided |",
+              "| a missing or unlisted virtual source fails the step | a check that passed with nothing to connect to would prove nothing; only the connected outcome is a pass, and the start probe still reports the machine's own empty list |",
+              "| the connect probe prints the ordinary report lines too | the same markers then cover both probes, so a change in one is visible in the other rather than hiding behind a second vocabulary |",
+          ]
+
+          COVERAGE_ROW = "| a source being played from | the port connects a source the probe published, but nothing has ever been sent through it, so the receive path and a controller's own messages are unproven | next action 2, sending from the virtual source |"
+
+          COMMIT_ROWS = [
+              "| `a84c56e` | `MIDIConnectProbe`, the attempt type and the six-outcome classification in the core module; failed run `42739979656` |",
+              "| `769b43f` | `VirtualMIDISource` and `MIDIConnectProbeTests` |",
+              "| `9336197` | `MIDIInputService.refresh()`, so a source listed a moment late is not reported as missing |",
+              "| `a03ec8c` | `SUNDAYKEYS_PROBE_MIDI_CONNECT` in `LaunchProbe` |",
+              "| `78ce36e` | `tools/midi_smoke.sh` runs both probes and publishes the connect counts; failed run `42739979656` |",
+              "| `5a2e4c6` | `MIDIConnectProbe.exitCode` and `provesConnectPath` forwarded; failed run `42740177399` |",
+              "| `7b8567f` | the exit-status expectation corrected; run `42740337754` proved the connect and failed only on the pid suffix |",
+              "| `7d5cd17` | the pid stripped from the status before it is compared; verified by run `42740507134` |",
+          ]
+
+          progress = load("docs/progress.md")
+          insert_before_row(progress, "| Test | queue stress", [PHASE_ROW])
+          insert_before_heading(progress, "## Next actions, in order", MILESTONE)
+          replace_rows(progress, NEXT_ACTIONS, "## Next actions, in order", "## Build verification")
+          insert_at_table_end(progress, "## Coverage that remains", RUN_ROWS)
+          replace_row(progress, "| a MIDI source being connected and played from |", COVERAGE_ROW)
+          insert_at_table_end(progress, "## Decisions recorded", DECISION_ROWS)
+          insert_at_table_end(progress, "## Commit trail", COMMIT_ROWS)
+          save("docs/progress.md", progress)
+
+          readme = load("README.md")
+          replace_row(
+              readme,
+              "| MIDI started in CI |",
+              "| MIDI connected in CI | the runner creates a CoreMIDI client and an input port, enumerates the source list, then publishes a virtual source of its own and lets the engine's own enumeration find it and connect it; the status reads `MIDI ready, 1 of 1 source(s) connected`, and a start with no source still says so instead of hiding it |"
+          )
+          replace_row(
+              readme,
+              "| not yet verified on hardware |",
+              "| not yet verified on hardware | no controller has ever been connected, nothing has been sent from the virtual source, nothing has been listened to, and no person has seen the window |"
+          )
+          insert_before_row(readme, "| `tools/` |", [
+              "| `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift` | classifies what a connect attempt against the probe's own virtual source proved |",
+              "| `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift` | publishes, and then disposes, the virtual CoreMIDI source the connect probe connects to |",
+          ])
+          replace_row(
+              readme,
+              "| `tools/midi_smoke.sh` |",
+              "| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, publishes a virtual source, requires the engine to enumerate and connect it, and reports a machine with no source as a limitation |"
+          )
+          insert_before_heading(readme, "## Reproduce the analysis", [
+              "### Connecting without a controller",
+              "",
+              "The runner has no controller, so for a long time the connect call itself had never run: the client and",
+              "port were created, `MIDIGetNumberOfSources` returned zero and the step said so.",
+              "`SUNDAYKEYS_PROBE_MIDI_CONNECT=1` closes that: the app creates a virtual source with",
+              "`MIDISourceCreateWithProtocol` before starting the engine, so the engine's own enumeration finds it,",
+              "its port connects it and the status it derives reads `MIDI ready, 1 of 1 source(s) connected`.",
+              "",
+              "- `MIDIConnectProbe` in the core module names the outcome - connected, refused by the port, no client",
+              "  or port, no source published, never enumerated, listed but never attempted - with its own exit",
+              "  status (0, 6, 4/5, 7, 8, 9) and its own line, so a green step can only mean the port accepted the",
+              "  source.",
+              "- the probe prints the ordinary report lines as well as its own, so both probes read the same",
+              "  markers, and it disposes the source and its client afterwards.",
+              "- `tools/midi_smoke.sh` treats a missing or unlisted source as a failure, and it still publishes the",
+              "  start probe's no-sources warning, because that is the machine's hardware answer rather than a pass.",
+              "",
+              "Run [`42740507134`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) on",
+              "`7d5cd17` is the first green run of it: all fifteen steps passed and the step published \"MIDI",
+              "connect probe: virtual source created, engine enumerated 1 source(s), connected 1, status: MIDI",
+              "ready, 1 of 1 source(s) connected\". Nothing has been sent from that source yet, so the receive path",
+              "is next.",
+          ])
+          replace_until_next_marker(
+              readme,
+              "- The bundle is assembled, signed, checked, started and given an audio graph and a MIDI client on the",
+              [
+                  "- The bundle is assembled, signed, checked, started and given an audio graph and a MIDI client on the",
+                  "runner, but no person has seen its window: nothing has been listened to, no controller has been",
+                  "  connected, nothing has been sent from the virtual source, and no local build has been run; every",
+                  "  result comes from the macOS runner.",
+              ]
+          )
+          replace_until_next_marker(
+              readme,
+              "- `AppModel.start()` discards the MIDI start verdict",
+              [
+                  "- The MIDI status is published by the model and refreshed on every source-list change, but the app",
+                  "  target has no view test and nobody has read the line on screen.",
+              ]
+          )
+          save("README.md", readme)
+
+          print("docs/progress.md and README.md edited")
+          PY
+
+      - name: Show what changed
+        run: git --no-pager diff --stat
+
+      - name: Commit and push
+        run: |
+          git config user.name "WorshipWarehouse"
+          git config user.email "worshipwarehousesite@gmail.com"
+          git add docs/progress.md README.md
+          git commit -m "Record the MIDI connect milestone and the runs behind it [skip ci]"
+          git push
