@@ -17,14 +17,20 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
 
+          NL = chr(10)
+          BS = chr(92)
+
           def edit(path, old_lines, new_lines):
               file = Path(path)
               text = file.read_text()
-              old = "\n".join(old_lines)
-              assert text.count(old) == 1, f"anchor not unique in {path}"
-              file.write_text(text.replace(old, "\n".join(new_lines)))
+              old = NL.join(old_lines)
+              count = text.count(old)
+              if count != 1:
+                  print(f"::error::files-update: anchor found {count} times in {path}")
+                  raise SystemExit(1)
+              file.write_text(text.replace(old, NL.join(new_lines)))
+              print(f"edited {path}")
 
-          # 1. The core parser gains a packet-level entry point.
           edit(
               "Sources/SundayKeysCore/MIDIMessage.swift",
               [
@@ -111,7 +117,6 @@ jobs:
               ],
           )
 
-          # 2. The input port hands whole packets to that parser.
           edit(
               "Sources/SundayKeysApp/MIDI/MIDIInputService.swift",
               [
@@ -160,26 +165,24 @@ jobs:
               ],
           )
 
-          # 3. The probe prints one line per message it parsed.
           edit(
               "Sources/SundayKeysCore/MIDI/MIDIReceiveProbe.swift",
               [
                   "        lines.append(",
-                  '            "MIDI receive probe: the app received \\(received.count) message(s): \\(counts.noteOns) note on, \\(counts.noteOffs) note off, \\(counts.controlChanges) control change"',
+                  '            "MIDI receive probe: the app received ' + BS + '(received.count) message(s): ' + BS + '(counts.noteOns) note on, ' + BS + '(counts.noteOffs) note off, ' + BS + '(counts.controlChanges) control change"',
                   "        )",
               ],
               [
                   "        lines.append(",
-                  '            "MIDI receive probe: the app received \\(received.count) message(s): \\(counts.noteOns) note on, \\(counts.noteOffs) note off, \\(counts.controlChanges) control change"',
+                  '            "MIDI receive probe: the app received ' + BS + '(received.count) message(s): ' + BS + '(counts.noteOns) note on, ' + BS + '(counts.noteOffs) note off, ' + BS + '(counts.controlChanges) control change"',
                   "        )",
                   "",
                   "        // One line per message, so the step output says which message came",
                   "        // back rather than only how many of each the summary counted.",
-                  '        lines.append(contentsOf: received.map { "MIDI receive probe: received \\(name(of: $0))" })',
+                  '        lines.append(contentsOf: received.map { "MIDI receive probe: received ' + BS + '(name(of: $0))" })',
               ],
           )
 
-          # 4. The name of a message, as the probe prints it.
           edit(
               "Sources/SundayKeysCore/MIDI/MIDIReceiveProbe.swift",
               [
@@ -191,17 +194,17 @@ jobs:
                   "    private func name(of message: MIDIMessage) -> String {",
                   "        switch message {",
                   "        case let .noteOn(note, velocity, channel):",
-                  '            return "note on \\(note) velocity \\(velocity) on channel \\(Int(channel) + 1)"',
+                  '            return "note on ' + BS + '(note) velocity ' + BS + '(velocity) on channel ' + BS + '(Int(channel) + 1)"',
                   "        case let .noteOff(note, velocity, channel):",
-                  '            return "note off \\(note) velocity \\(velocity) on channel \\(Int(channel) + 1)"',
+                  '            return "note off ' + BS + '(note) velocity ' + BS + '(velocity) on channel ' + BS + '(Int(channel) + 1)"',
                   "        case let .controlChange(controller, value, channel):",
-                  '            return "control change \\(controller) = \\(value) on channel \\(Int(channel) + 1)"',
+                  '            return "control change ' + BS + '(controller) = ' + BS + '(value) on channel ' + BS + '(Int(channel) + 1)"',
                   "        case let .programChange(program, channel):",
-                  '            return "program change \\(program) on channel \\(Int(channel) + 1)"',
+                  '            return "program change ' + BS + '(program) on channel ' + BS + '(Int(channel) + 1)"',
                   "        case let .pitchBend(value, channel):",
-                  '            return "pitch bend \\(value) on channel \\(Int(channel) + 1)"',
+                  '            return "pitch bend ' + BS + '(value) on channel ' + BS + '(Int(channel) + 1)"',
                   "        case let .other(status, data):",
-                  '            return "status \\(status) with \\(data.count) byte(s)"',
+                  '            return "status ' + BS + '(status) with ' + BS + '(data.count) byte(s)"',
                   "        }",
                   "    }",
                   "",
@@ -210,7 +213,6 @@ jobs:
               ],
           )
 
-          # 5. The probe test asserts the per-message lines too.
           edit(
               "Tests/SundayKeysCoreTests/MIDIReceiveProbeTests.swift",
               [
@@ -224,25 +226,22 @@ jobs:
               ],
           )
 
-          # 6. The smoke check publishes what the app saw before it asserts anything.
-          edit(
-              "tools/midi_smoke.sh",
-              [
-                  '[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"',
-              ],
-              [
-                  "# Every line the receive probe printed is published before anything is",
-                  "# asserted, so a step that fails still carries what the app actually saw.",
-                  "while IFS= read -r line; do",
-                  '  [[ -n "$line" ]] || continue',
-                  '  printf \'::notice::%s\\n\' "$line"',
-                  'done < <(sed -n \'s/^SundayKeysApp: \\(MIDI receive probe: .*\\)$/\\1/p\' "$log" | sed \'s/ pid=[0-9][0-9]*$//\')',
-                  "",
-                  '[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"',
-              ],
-          )
+          script_old = [
+              '[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"',
+          ]
+          script_new = [
+              "# Every line the receive probe printed is published before anything is",
+              "# asserted, so a step that fails still carries what the app actually saw.",
+              "while IFS= read -r line; do",
+              '  [[ -n "$line" ]] || continue',
+              "  printf '::notice::%s" + BS + "n' \"$line\"",
+              "done < <(sed -n 's/^SundayKeysApp: " + BS + "(MIDI receive probe: .*)$/" + BS + "1/p' \"$log\" | sed 's/ pid=[0-9][0-9]*$//')",
+              "",
+              '[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"',
+          ]
+          edit("tools/midi_smoke.sh", script_old, script_new)
 
-          print("edits applied")
+          print("all edits applied")
           PY
 
       - name: Write the packet-level parser tests
