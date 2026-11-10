@@ -93,7 +93,7 @@ final class MIDIReceiveProbeTests: XCTestCase {
         )
         // The expectation the probe asserts is therefore the one its own packets
         // decode to, not a second description of them.
-        XCTAssertEqual(parsed, everyPacket)
+        XCTAssertEqual(parsed.compactMap { $0 }, everyPacket)
     }
 
     func testAMissingNoteOffIsReportedRatherThanCountedAsSuccess() {
