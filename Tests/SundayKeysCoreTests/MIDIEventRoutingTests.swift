@@ -92,15 +92,21 @@ final class MIDIEventRoutingTests: XCTestCase {
         )
     }
 
-    func testEmptyInputIsRefusedWithATypedError() {
+    func testAnEmptyPacketIsNothingRatherThanARefusal() {
+        // One empty message is a typed refusal, so the single-message entry
+        // point names it.
         XCTAssertEqual(MIDIEventDecoder.decode([]), .failure(.empty))
 
+        // A packet with no bytes at all carries no message to refuse: the
+        // router delivers nothing, counts nothing and leaves the status line
+        // where it was, rather than reporting a rejection that never happened.
         let transport = RecordingTransport()
         var router = MIDIEventRouter()
-        XCTAssertEqual(router.route([], to: transport), [.empty])
+        XCTAssertEqual(router.route([], to: transport), [])
         XCTAssertEqual(transport.events, [])
         XCTAssertEqual(router.delivered, 0)
-        XCTAssertEqual(router.rejected, 1)
+        XCTAssertEqual(router.rejected, 0)
+        XCTAssertEqual(router.statusLine, "MIDI route: nothing yet")
     }
 
     func testATruncatedMessageNamesWhatWasMissing() {
