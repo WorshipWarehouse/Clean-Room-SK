@@ -833,6 +833,70 @@ the render thread started on the runner's output device; nobody has listened to 
 click, and no window has been looked at.
 
 
+## Patch document milestone: a sound can leave the bank as a file
+
+The bank has always been one file, so a single patch had no way out of it. A player who
+wanted to carry one sound to another Mac, mail it to a bandmate, or keep a copy before
+editing had nothing to carry: the only export was the whole bank, and a whole bank drags
+the set list and every other sound with it. That was the gap after the click milestone,
+and it is now closed.
+
+- **A document, not a bare patch.** `PatchDocument` is `format`, `version` and the patch,
+  because a reader has to tell a patch file from a bank, from unrelated JSON, and from a
+  document a later build wrote. `format` is `sundaykeys-cleanroom.patch`; this build
+  writes version 1 and reads version 1. The original app's preset format is recorded in
+  the analysis as **Unknown**, so this envelope is this implementation's own shape
+  rather than a reproduction of theirs.
+- **Five refusals, each with its own sentence.** An unreadable file, a file that is not a
+  JSON object, a JSON object that is not this format, a version this build does not know,
+  and a document whose patch will not decode are five different problems;
+  `PatchDocumentFailure` names which one happened. The version is checked before the
+  patch is decoded, so a later format is refused rather than partly read.
+- **The keys are sorted.** The same patch produces the same bytes, so an export is
+  diffable and a round trip can be asserted byte for byte.
+- **A file in a folder of its own.** `PatchTransfer` writes into
+  `Application Support/SundayKeysCleanRoom/Patch Exports`, creating the folder, so an
+  export never touches the bank it came from. The filename comes from the patch name:
+  anything that is not a letter, digit, dash or underscore becomes a dash, runs collapse,
+  and an empty name still names a file.
+- **An import never overwrites.** `PatchAdoption.adopt` gives a colliding id a fresh one
+  and a colliding name a suffix, so importing a document over the patch the player is
+  playing adds a second sound instead of changing the first under their hands.
+- **Twelve cases assert it.**
+  `Tests/SundayKeysCoreTests/PatchDocumentTests.swift` round trips a patch with an edited
+  layer gain, transpose, EQ and reverb, and proves the encoding is stable; refuses a
+  foreign format by name, a missing format field, version 2, version 0, a non-JSON file
+  and an envelope with a broken patch; writes and reads through a real directory and
+  proves the folder is created; refuses a missing file with a typed error; checks the
+  filename rules; and checks that adopting a copy keeps the original patch, that a fresh
+  patch keeps its identity, and that importing the same document twice yields `Twice`
+  and `Twice 2`.
+
+**Observed.** Run [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) on `59a5cdc`: the build job concluded success
+with every step green. `Build (debug, with tests)` 13:59:09 to 13:59:29 compiled the new
+core file and the new suite, `Test` 13:59:29 to 13:59:32 ran every suite including the
+twelve cases, `Build (release)` 13:59:32 to 13:59:50 followed, `Launch the app` 13:59:52
+to 13:59:59 started the bundle, and the job completed at 14:00:09. The same head's click
+workflow, run [42829541147](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541147), stayed green with the new file
+in the tree, and its session workflow, run
+[42829541256](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541256), did too.
+
+The first attempt at the probe was run
+[42829541318](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541318) on the same head, and it failed: `Probe the
+patch transfer` ran 13:59:43 to 14:00:05 and the step's annotation was the script's own
+line, because the probe had been committed before the call site that runs it. The wiring
+commit `271844d` added that call site, the model's two methods and the window's row, and the
+probe step then passed in run [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) before this write-up was pushed.
+
+**What this does not establish.** Nobody has pressed the two buttons: the probe calls
+`PatchTransfer` and `PatchAdoption` directly in the app's own process and folder, which
+proves the file round trip, the refusals and the adoption rule, but not the buttons'
+layout on a screen, the panel's readability, or that a player would find them where the
+transport row puts them. It also says nothing about the original app's preset format,
+which remains **Unknown** and uncompiled against; two clean-room documents did not
+cross machines, because the transfer here is one process writing and reading its own
+file in one Application Support folder.
+
 ## Next actions, in order
 
 1. **A controller on a real Mac.** Every MIDI packet so far came from the probe's own virtual
@@ -896,6 +960,13 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `5a2e4c6` | [42740177399](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740177399) | failure in the tests: `testEveryProbeOutcomeHasItsOwnExitStatusAndLine` expected 4 for a refused input port where `MIDIStartFailure` says 5. The expectation was wrong, not the status; fixed in `7b8567f`. |
 | `7b8567f` | [42740337754](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740337754) | failure in the MIDI step, after build, tests, release, bundle, launch (02:06:22 to 02:06:27) and audio (02:06:27 to 02:06:29) passed. The step's annotation reads "the MIDI status does not report a connected source: MIDI ready, 1 of 1 source(s) connected pid=2111", so the probe had created, enumerated and connected its own source and only the script's comparison failed on the pid suffix. Fixed in `7d5cd17`. |
 | `7d5cd17` | [42740507134](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) | success: `MIDIConnectProbe`, `VirtualMIDISource`, `MIDIInputService.refresh()`, the connect probe and `MIDIConnectProbeTests`. Build 02:07:20 to 02:07:51, warnings at 02:07:51, tests 02:07:51 to 02:07:54, release 02:07:54 to 02:08:10, bundle 02:08:10 to 02:08:13, launch step 12 02:08:13 to 02:08:21, audio step 13 02:08:21 to 02:08:24, MIDI step 14 02:08:24 to 02:08:27, bootstrap step 15 02:08:27 to 02:08:29, job completed 02:08:35. A notice annotation records the proof: virtual source created, one source enumerated, one connected, status `MIDI ready, 1 of 1 source(s) connected`. The start probe's no-sources warning was published in the same run, and there were four annotations in all. |
+| `3b5c0bd` | [42827692945](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42827692945) | success: the click milestone's write-up with the new window controls. `Build (debug, with tests)` 13:47:16 to 13:47:43, `Test` 13:47:43 to 13:47:47, `Build (release)` 13:47:47 to 13:48:04, `Launch the app` 13:48:06 to 13:48:12, job completed 13:48:24. |
+| `3b5c0bd` | [42827695399](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42827695399) | success, after a long queue: the click workflow on the same head. `Build (release)` 13:52:15 to 13:52:41, `Bundle the app` 13:52:41 to 13:52:43, `Probe the click` 13:52:43 to 13:52:48, job completed 13:52:50. |
+| `59a5cdc` | [42829541319](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541319) | success: `PatchDocument`, `PatchTransfer`, `PatchAdoption` and the twelve cases in `PatchDocumentTests`. `Build (debug, with tests)` 13:59:09 to 13:59:29, `Test` 13:59:29 to 13:59:32, `Build (release)` 13:59:32 to 13:59:50, `Launch the app` 13:59:52 to 13:59:59, job completed 14:00:09. |
+| `59a5cdc` | [42829541318](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541318) | failure: `Probe the patch transfer` 13:59:43 to 14:00:05, because the probe was pushed before the call site that runs it existed. Fixed in `271844d`, where the same probe step passed in run `42830474030`. |
+| `59a5cdc` | [42829541147](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541147) | success: the click workflow, still green with the new core file. `Probe the click` 13:59:40 to 13:59:46, job completed 13:59:47. |
+| `59a5cdc` | [42829541256](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541256) | success: the session resume probe on the same head. `Probe the session resume` 13:59:39 to 13:59:42, job completed 13:59:43. |
+| `271844d` | [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) | the wiring and this write-up: `PatchTransferSection`, the model's export and import, the probe's call site, and the probe itself passing on the runner before either commit was pushed. |
 
 ## Coverage that remains
 

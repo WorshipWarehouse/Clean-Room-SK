@@ -21,6 +21,7 @@ Nothing here is produced by executing the original app, and no original source w
 | session resumed on launch | the patch that was playing is remembered in its own file beside the bank, so a relaunch opens where the service left off rather than at the first patch; a stale or unreadable hint falls back and says why |
 | relaunch proven on disk | run `42821991761` starts the bundle three times against one folder: one writes a bank and remembers the third patch, the next launch prints the resumed patch with the play head on its slot, and a hint naming a deleted patch falls back with its reason |
 | tempo and click | a sample-accurate click the render thread generates from a tempo clock: downbeats accented, a tempo change taking effect on the next beat, the click added after the patch's effects so nothing echoes it, and switching it off letting the click in flight finish |
+| patch documents | a single patch leaves the bank as its own `.sundaykeyspatch` file and comes back with its layers, transposes, effects and controller layout intact; a file whose format or version this build does not know is refused with the reason and a version is checked before the patch is decoded, so a later format is never partly read; an import over a patch the bank already holds adds a second sound instead of overwriting the one being played |
 | not yet verified on hardware | no controller has ever been connected and no person has seen the window; the only MIDI traffic the app has ever seen came from the probe's own virtual source |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
@@ -384,6 +385,30 @@ bundle, switches the click on at 120 bpm, counts the beats the render thread
 started and finds none after it was switched off. The controls sit in the
 transport row, and nobody has heard it.
 
+
+## Patch documents
+
+A patch is editable in the window and stored in the bank, but until now it had no life of
+its own: carrying one sound to another Mac meant carrying every sound. `PatchDocument`
+fixes that, and it is an envelope rather than a bare patch so a reader can tell a patch
+file from a bank, from unrelated JSON and from a document a later build wrote.
+
+- `format` is `sundaykeys-cleanroom.patch`, version 1, and this build refuses any other
+  format by name and any version it does not know rather than partly reading it;
+- `PatchTransfer.write` puts the document in
+  `Application Support/SundayKeysCleanRoom/Patch Exports`, creating the folder, and
+  `PatchTransfer.read` turns a missing or unreadable file into a typed reason;
+- the filename is derived from the patch name and is always a filename;
+- `PatchAdoption.adopt` adds an imported patch without overwriting one the bank holds: a
+  colliding id gets a fresh one and a colliding name a suffix;
+- `Export patch` and `Import patch` sit under the patch panel, and the status line beside
+  them says what happened.
+
+The model is proven by `Tests/SundayKeysCoreTests/PatchDocumentTests.swift` and by the
+`patch-transfer` workflow, which starts the bundle and runs
+`tools/patch_transfer_smoke.sh`; run [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) is where the probe step
+passed. Nobody has used the two buttons, and the format is this implementation's own:
+the original app's preset format is recorded as **Unknown**.
 
 ## Session scope
 
