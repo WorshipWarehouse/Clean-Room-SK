@@ -2,23 +2,27 @@ import Darwin
 import Foundation
 
 /// The keysound engine the app talks to: producer-side routing plus the
-/// render-side drain, followed by the patch's effect chain.
+/// render-side drain, followed by the patch's effect chain and then the click.
 ///
-/// `noteOn`, `noteOff`, `setPatch` and `setEffects` run on the MIDI thread or the
-/// main thread, serialised by the caller so there is exactly one producer, which is
-/// the same contract the SPSC ring already requires. They map the played key through
-/// `LayerRouter` and enqueue one command per layer, so a disabled layer or a note
-/// outside a layer's range never reaches the render thread for that layer at all.
+/// `noteOn`, `noteOff`, `setPatch`, `setEffects` and `setMetronome` run on the MIDI
+/// thread or the main thread, serialised by the caller so there is exactly one
+/// producer, which is the same contract the SPSC ring already requires. They map the
+/// played key through `LayerRouter` and enqueue one command per layer, so a disabled
+/// layer or a note outside a layer's range never reaches the render thread for that
+/// layer at all.
 ///
 /// `render` runs on the audio thread: it drains every pending command, renders the
-/// voices, then runs the effect chain over the block. Nothing is ever dropped. If the
-/// ring is momentarily full the producer spins in its own thread until the render
-/// thread drains it, which costs at most one buffer period; the render thread itself
-/// never waits.
+/// voices, runs the effect chain over the block and then adds the click. Nothing is
+/// ever dropped. If the ring is momentarily full the producer spins in its own thread
+/// until the render thread drains it, which costs at most one buffer period; the
+/// render thread itself never waits.
 public final class RealtimeKeysoundEngine {
     public private(set) var patch: Patch
     public let instrument: PolyphonicInstrument
     public let effects: EffectChain
+    /// The click track. It belongs to the app rather than to a patch, and the engine
+    /// adds it after the effects, so a cue is never reverberated, delayed or equalised.
+    public let metronome: Metronome
 
     private var router: LayerRouter
     private let queue: SPSCCommandQueue
@@ -36,6 +40,7 @@ public final class RealtimeKeysoundEngine {
         patch = initial
         router = LayerRouter(layers: layers)
         effects = EffectChain(sampleRate: sampleRate)
+        metronome = Metronome(sampleRate: sampleRate)
         instrument = PolyphonicInstrument(
             sampleRate: sampleRate,
             layers: layers,
@@ -49,6 +54,11 @@ public final class RealtimeKeysoundEngine {
 
     public var voiceCount: Int {
         instrument.currentVoiceCount
+    }
+
+    /// Beats the render thread has started, read atomically.
+    public var clickCount: Int {
+        metronome.clickCount
     }
 
     /// Switches the whole patch in one step.
@@ -90,6 +100,14 @@ public final class RealtimeKeysoundEngine {
     public func setEffects(_ settings: EffectsSettings) {
         patch.effects = settings
         effects.apply(settings: settings)
+    }
+
+    /// Producer side. Publishes the click's settings through the metronome's own
+    /// seqlock, so switching the click on never waits for a render block and never
+    /// costs the render thread a lock. The patch is not involved: the click is a cue
+    /// for the player, not part of the sound.
+    public func setMetronome(_ settings: MetronomeSettings) {
+        metronome.publish(settings)
     }
 
     public func noteOn(note: UInt8, velocity: UInt8) {
@@ -139,9 +157,9 @@ public final class RealtimeKeysoundEngine {
         return false
     }
 
-    /// Render thread only. Drains the queue, renders the voices, then processes the
-    /// patch's effects over the finished block so every voice is heard through the
-    /// same chain.
+    /// Render thread only. Drains the queue, renders the voices, processes the patch's
+    /// effects over the finished block and then adds the click, so every voice is
+    /// heard through the same chain and the cue is heard through none of it.
     public func render(into buffer: UnsafeMutableBufferPointer<Float>, frameCount: Int) {
         var command = queue.pop()
         while let current = command {
@@ -150,5 +168,6 @@ public final class RealtimeKeysoundEngine {
         }
         instrument.render(into: buffer, frameCount: frameCount)
         effects.process(into: buffer, frameCount: frameCount)
+        metronome.render(into: buffer, frameCount: frameCount)
     }
 }

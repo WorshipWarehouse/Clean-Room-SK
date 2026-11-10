@@ -12,6 +12,8 @@ import SundayKeysCore
 ///   waits, so a buffer is never dropped and the audio device never stalls
 /// - keysound events reach the render thread through the lock-free SPSC ring in
 ///   `RealtimeKeysoundEngine`, which the block drains at the start of every one
+/// - the click rides its own seqlock beside that ring, so switching it on is a
+///   publication rather than a command and costs the render block nothing
 /// - draining per block means a keystroke is heard within one buffer period:
 ///   512 frames is 10.7 ms at 48 kHz and 5.3 ms at 96 kHz. The engine's default
 ///   ring holds 2048 commands, over forty full buffers of dense traffic
@@ -22,6 +24,9 @@ import SundayKeysCore
 final class AudioEngineController {
     private let engine = AVAudioEngine()
     private var currentPatch = Patch.starter
+    /// What the click should do, kept here as well as in the engine so a click
+    /// switched on before Start is already what the graph plays.
+    private var metronomeSettings = MetronomeSettings()
     private var keysound: RealtimeKeysoundEngine?
     private var sourceNode: AVAudioSourceNode?
     private(set) var isRunning = false
@@ -29,6 +34,12 @@ final class AudioEngineController {
 
     var activeVoices: Int {
         keysound?.voiceCount ?? 0
+    }
+
+    /// Beats the running graph has started. Zero while stopped, because the graph
+    /// that was counting is gone with the engine.
+    var clickCount: Int {
+        keysound?.clickCount ?? 0
     }
 
     /// The patch the graph is voiced for. Assigning while stopped is allowed and
@@ -65,6 +76,9 @@ final class AudioEngineController {
         // Built here, on the main thread: wavetable synthesis and voice pool
         // allocation must never happen on the render thread.
         let keysound = RealtimeKeysoundEngine(sampleRate: plan.sampleRate, layers: currentPatch.layers)
+        // The click's settings survive a stop and start, so a click left on before
+        // Start is already audible in the first block.
+        keysound.setMetronome(metronomeSettings)
 
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -133,6 +147,12 @@ final class AudioEngineController {
     func setPatch(_ patch: Patch, releasingVoices: Bool = true) {
         currentPatch = patch
         keysound?.setPatch(patch, releasingVoices: releasingVoices)
+    }
+
+    /// Producer side. Remembered while stopped, published at once while running.
+    func setMetronome(_ settings: MetronomeSettings) {
+        metronomeSettings = settings
+        keysound?.setMetronome(settings)
     }
 
     func noteOn(note: UInt8, velocity: UInt8) {
