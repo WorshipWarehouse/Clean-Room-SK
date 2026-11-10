@@ -1,0 +1,127 @@
+name: fix-final-head
+
+# One shot. The patch document milestone cited the wire run 42830474030 (head 726823de) as if
+# it were the build run on 59a5cdc, and the run table stopped at the wiring commit. This
+# corrects the citation and records the four runs that ran on the final head dd5ebdef, then
+# deletes itself in a second commit.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Correct and record
+        run: |
+          set +e
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee /tmp/fix.log
+          import pathlib, re, subprocess, sys
+
+          doc = pathlib.Path("docs/progress.md")
+          text = doc.read_text()
+
+          pat = re.compile(
+              r"\[42830474030\]\((https://github\.com/WorshipWarehouse/Clean-Room-SK/actions/runs/)"
+              r"42830474030\)(\s+on\s+`59a5cdc`)"
+          )
+          hits = len(pat.findall(text))
+          if hits != 1:
+              print(f"fix check: expected exactly one misattributed citation, found {hits}")
+              sys.exit(1)
+          text = pat.sub(lambda m: f"[42829541319]({m.group(1)}42829541319){m.group(2)}", text, count=1)
+          print("fix: the milestone now cites build 42829541319 on 59a5cdc")
+
+          old = "the wiring and this write-up:"
+          if old in text:
+              text = text.replace(old, "the wiring commit:", 1)
+              print("fix: the wiring row names the commit it describes")
+
+          base = "https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/"
+          rows = [
+              "| `3b5c0bd` | [42827692945](" + base + "42827692945) | success: the build on the click "
+              "milestone's head, where the new `ClickSection` compiled and every suite ran. `Test` "
+              "13:47:43 to 13:47:47, job completed 13:48:24. |",
+              "| `3b5c0bd` | [42827695399](" + base + "42827695399) | success: the click probe on the "
+              "same head. `Build (release)` 13:52:15 to 13:52:41, bundle 13:52:41 to 13:52:43, "
+              "`Probe the click` 13:52:43 to 13:52:48, job completed 13:52:50. |",
+              "| `dd5ebdef` | [42830844094](" + base + "42830844094) | success: the final head. Debug "
+              "build with tests 14:07:14 to 14:07:39, warnings at 14:07:39, `Test` 14:07:39 to "
+              "14:07:42, release 14:07:42 to 14:08:05, bundle 14:08:05 to 14:08:08, launch 14:08:08 "
+              "to 14:08:16, audio probe 14:08:16 to 14:08:19, MIDI probe 14:08:19 to 14:08:21, "
+              "bootstrap check 14:08:21 to 14:08:23, job completed 14:08:29. |",
+              "| `dd5ebdef` | [42830843975](" + base + "42830843975) | success: the click probe on "
+              "the final head. Release 14:07:21 to 14:07:56, bundle 14:07:56 to 14:07:58, "
+              "`Probe the click` 14:07:58 to 14:08:04, job completed 14:08:06. |",
+              "| `dd5ebdef` | [42830844138](" + base + "42830844138) | success: the session resume "
+              "probe on the final head. Release 14:07:08 to 14:07:37, bundle 14:07:37 to 14:07:39, "
+              "`Probe the session resume` 14:07:39 to 14:07:43, job completed 14:07:45. |",
+              "| `dd5ebdef` | [42830846119](" + base + "42830846119) | success: the patch transfer "
+              "probe on the final head, the step that failed in 42829541318. Release 14:07:06 to "
+              "14:07:32, bundle 14:07:32 to 14:07:34, `Probe the patch transfer` 14:07:34 to "
+              "14:07:36, job completed 14:07:38. |",
+          ]
+          missing = [r for r in rows if re.search(r"/runs/(\d+)", r).group(1) not in text]
+          if missing:
+              header = "| commit | run | conclusion |"
+              if text.count(header) != 1:
+                  print(f"fix check: expected one run table header, found {text.count(header)}")
+                  sys.exit(1)
+              lines = text.split("\n")
+              h = next(n for n, l in enumerate(lines) if l.strip() == header)
+              last = h
+              n = h + 1
+              while n < len(lines) and lines[n].startswith("|"):
+                  last = n
+                  n += 1
+              lines[last + 1:last + 1] = missing
+              text = "\n".join(lines)
+              print(f"fix: {len(missing)} row(s) added to the run table")
+
+          if "nobody has pressed" not in text:
+              note = [
+                  "",
+                  "**What the final head's runs do not establish.** Every step above ran on a runner, "
+                  "not on a person's Mac: nobody has pressed `Export patch` or `Import patch` in a "
+                  "window, no patch file has crossed between two machines, and the document format "
+                  "is this implementation's own invention rather than the original app's preset "
+                  "format, which the analysis still records as **Unknown**.",
+              ]
+              lines = text.split("\n")
+              h = next(n for n, l in enumerate(lines) if l.strip() == "| commit | run | conclusion |")
+              last = h
+              n = h + 1
+              while n < len(lines) and lines[n].startswith("|"):
+                  last = n
+                  n += 1
+              lines[last + 1:last + 1] = note
+              text = "\n".join(lines)
+              print("fix: the run table now says what its runs do not establish")
+
+          doc.write_text(text)
+
+          subprocess.run(["git", "config", "user.name", "Sunday Keys CI"], check=True)
+          subprocess.run(["git", "config", "user.email", "actions@users.noreply.github.com"], check=True)
+          subprocess.run(["git", "add", "docs/progress.md"], check=True)
+          subprocess.run(
+              ["git", "commit", "-m", "Correct the milestone's run citation and record the final head's runs"],
+              check=True,
+          )
+          subprocess.run(["git", "rm", "-q", ".github/workflows/fix_final_head.yml"], check=True)
+          subprocess.run(["git", "commit", "-m", "Remove the one-shot final-head workflow"], check=True)
+          subprocess.run(["git", "push", "origin", "HEAD:main"], check=True)
+          print("fix: corrected and recorded, pushed")
+          PY
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -30 /tmp/fix.log | tr -d '\r' | while IFS= read -r line; do
+              if [ -n "$line" ]; then echo "::error::${line}"; fi
+            done
+          fi
+          exit "$status"
