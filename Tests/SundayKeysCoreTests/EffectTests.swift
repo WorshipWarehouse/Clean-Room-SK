@@ -289,12 +289,27 @@ final class EffectsDSPTests: XCTestCase {
         }
     }
 
+    /// The low split sits at 250 Hz and the high split at 3 kHz, and the three bands
+    /// sum to the input, so a gain is a shelf rather than a full cut at the corner.
+    /// The first version of this test asked for a full -12 dB at 6 kHz, which a
+    /// one-pole split cannot give: it puts about 89 percent of a 6 kHz tone in the
+    /// high band, and the run measured 0.555. The DSP was right and the assertion was
+    /// wrong, so the test now checks the shape the design promises: each gain moves
+    /// its own band and leaves the other one alone.
     func testEQBandsLiftAndCutTheirBand() {
-        let boosted = ratioThroughFreshEQ(frequency: 60, lowGain: 12, highGain: 0)
-        XCTAssertGreaterThan(boosted, 2.5, "60 Hz belongs to the low band")
+        let liftedLow = ratioThroughFreshEQ(frequency: 60, lowGain: 12, highGain: 0)
+        XCTAssertGreaterThan(liftedLow, 2.5, "60 Hz belongs to the low band")
 
-        let cut = ratioThroughFreshEQ(frequency: 6_000, lowGain: 0, highGain: -12)
-        XCTAssertLessThan(cut, 0.5, "6 kHz belongs to the high band")
+        let untouchedLow = ratioThroughFreshEQ(frequency: 60, lowGain: 0, highGain: -12)
+        XCTAssertEqual(untouchedLow, 1, accuracy: 0.1, "and the high gain must not reach it")
+
+        let cutHigh = ratioThroughFreshEQ(frequency: 6_000, lowGain: 0, highGain: -12)
+        XCTAssertLessThan(cutHigh, 0.75, "6 kHz sits above the split, so the high cut reaches it")
+
+        let liftedHigh = ratioThroughFreshEQ(frequency: 6_000, lowGain: 0, highGain: 12)
+        XCTAssertGreaterThan(liftedHigh, 1.4, "and the same band lifts")
+
+        XCTAssertLessThan(cutHigh, liftedHigh, "the two directions are opposite")
     }
 
     private func ratioThroughFreshEQ(frequency: Double, lowGain: Float, highGain: Float) -> Float {

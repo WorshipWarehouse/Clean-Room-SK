@@ -29,14 +29,6 @@ jobs:
           swift --version
           xcrun --find swift
 
-      - name: Cache the build directory
-        uses: actions/cache@v4
-        with:
-          path: .build
-          key: ${{ runner.os }}-swift-${{ hashFiles('Package.swift') }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-swift-${{ hashFiles('Package.swift') }}-
-
       - name: Resolve dependencies
         run: |
           set -o pipefail
