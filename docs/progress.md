@@ -16,7 +16,7 @@ this file tracks state.
 | Build, patches | patch bank, gapless switching, live layer editing, JSON persistence | `Sources/SundayKeysCore/Patch/`, run `42724195726` |
 | Build, effects | EQ, chorus, delay and reverb after the voice mix, owned by the patch | `Sources/SundayKeysCore/Audio/Effects/`, run `42726206476` |
 | Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
-| Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4 |
+| Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4, run `42729742825` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
@@ -57,9 +57,9 @@ launch).
   writes it as JSON at `~/Library/Application Support/SundayKeys/patches.json`.
 - **Persistence.** Writes are atomic and create the directory, so a crash mid-save cannot leave a
   half-written bank. A missing file is not an error: the starter bank loads and the player gets an
-  instrument rather than an empty window. `KeyLayer`, `Patch`, `EffectsSettings`,
-  `ControllerMapping` and `Setlist` all decode with documented defaults, so a bank written before a
-  field existed still loads.
+  instrument rather than an empty window. `KeyLayer`, `Patch`, `EffectsSettings`, `ControllerMapping`
+  and `Setlist` all decode with documented defaults, so a bank written before a field existed still
+  loads.
 - **Switching is gapless.** `setPatch` swaps the producer-side router, publishes each layer's timbre
   through the existing SPSC ring as `setLayerTimbre` commands, applies the new patch's effects and
   releases every sounding voice. Release is the same 220 ms fade, so the change is heard as a tail
@@ -142,7 +142,7 @@ round trip while a bank written before effects existed loads dry.
   mapping is stored in `Patch` and survives save and relaunch with everything else.
 - **Learning replaces rather than stacks.** A target carries one controller and a controller carries
   one target; binding either direction removes the previous pairing, so a relearned knob cannot fire
-two parameters at once.
+  two parameters at once.
 - **Channel precedence.** A binding for the exact channel wins over an any-channel binding, which
   lets a controller split across channels be assigned per channel while the any-channel default keeps
   answering everywhere else.
@@ -163,8 +163,9 @@ What the controller tests cover: both ends and the midpoint of the value mapping
 binding directions; channel precedence; unbinding; a bound change moving only its own parameter and
 no layer; an unbound controller changing nothing at all; a layer gain moving inside its clamp while
 the other layer is untouched; a target whose layer is gone being ignored; the standard layout
-answering on any channel; the target list being free of duplicates; the mapping surviving a bank round
-trip with its channel; a version 2 bank loading the standard layout; and a new patch starting with it.
+answering on any channel; the target list being free of duplicates; the mapping surviving a bank
+round trip with its channel; a version 2 bank loading the standard layout; and a new patch starting
+with it.
 
 ## Session and set list milestone
 
@@ -220,6 +221,12 @@ patch once; stepping a bank with no set list in bank order, wrapping; resolution
 lands on; the round trip through `PatchStore` including the play head; a version 3 bank loading
 without a set list and still stepping; and the engine tests above.
 
+Two of those tests failed the first time they ran (run `42728534122`), and in both cases the
+expectation was wrong and the model was right: the head reports the position of the slot that
+actually played, so skipping a dangling middle slot lands on index 2 and not 1, and a voice is still
+fading 20 blocks after a release that lasts 20.6 blocks. Both repairs are in `18e0268` and are
+recorded in the table below.
+
 ## Remote development: what CI actually does
 
 The local Mac has been unreachable for this whole stretch of work, so every result in this log comes
@@ -250,11 +257,10 @@ nobody has listened to this or clicked through it on this hardware.
 ## Decompilation: awaiting external access
 
 No artifact that can be decompiled is reachable from this environment. The shell tool refused every
-call again this session ("run_terminal_command is not currently available"), so no process can be
-started, no path can be examined and no Ghidra run is possible. The repository contains only docs,
-tools and Swift and C sources: no Mach-O, `.app`, AUv3 bundle, `.aupreset`, CAF payload, Ghidra
-project or prior decompilation export. Details and the exact access required are in
-[`re/access-determination.md`](re/access-determination.md).
+call again this session, so no process can be started, no path can be examined and no Ghidra run is
+possible. The repository contains only docs, tools and Swift and C sources: no Mach-O, `.app`, AUv3
+bundle, `.aupreset`, CAF payload, Ghidra project or prior decompilation export. Details and the exact
+access required are in [`re/access-determination.md`](re/access-determination.md).
 
 Required to resume: the Mac awake with the Freebuff desktop client connected, the app installed,
 Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minutes for an import.
@@ -296,6 +302,10 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `8a95eb0` | [42726778003](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726778003) | failure, before tests ran: `ContentView.swift:329` passed a ternary mixing `.secondary` (a hierarchical style) and `.orange` (a colour) to `foregroundStyle`, which has no common type. Fixed in `34a0c0e`. |
 | `34a0c0e` | [42726991886](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726991886) | success: the fixed tree, the controller mapping tests, the release build and the bootstrap smoke step. |
 | `ea50641` | [42727234267](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42727234267) | success: the effects and controller write-up, with no code change to the tree above. |
+| `da1a85d` | [42728077480](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728077480) | failure, before tests ran, six annotations: the new set list fixture in `SetlistTests.swift` declared its bank with `let` and then stepped it, which is a mutating call, so the suite did not compile. A fixture, not product code. Fixed in `9c6768d`. |
+| `0fe89b7` | [42728400967](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728400967) | failure: the write-up commit carried the same fixture, so the same compile error and no test ran. Fixed in `9c6768d`. |
+| `9c6768d` | [42728534122](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728534122) | failure, two tests of the new suite, eleven annotations, and both were assertions rather than the model: `testASlotWhosePatchIsMissingIsSkippedWhileStepping` expected the head at index 1 after stepping over the dangling middle slot, but a skipped slot is not removed, so the head is on index 2 of three; `testSteppingToAWetterPatchAppliesItsEffects` demanded an empty voice pool after 20 blocks, which is 10,240 frames of the 10,560-frame release. Fixed in `18e0268`. |
+| `18e0268` | [42729742825](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42729742825) | success: the debug build, all test suites including the set list ordering, persistence and set-list switching tests, the release build and the bootstrap smoke step. |
 
 ## Coverage that remains
 
@@ -344,6 +354,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | a bank without a set list plays in bank order | old banks keep working and a fresh bank needs no migration step |
 | a set list step goes through `setPatch` | it is a patch switch, so it must release voices and apply effects exactly like the bank picker |
 | adding a patch does not add a slot | the service is what the player built, not a side effect of editing patches |
+| skipping a slot does not compact the list | the head reports the position that actually played, so a skipped dangling slot leaves the head on index 2 of three, and the UI numbering keeps matching the list |
+| a test that asserts the voice pool empty renders past the release | 220 ms is 20.6 blocks of 512 frames, so 20 blocks leaves a voice still fading; the envelope was right and the block count in the test was wrong |
 
 ## Commit trail
 
@@ -378,5 +390,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `3d2d7d8` | set list model, play head, stepping, reorder, removal, pruning, bank version 4, set list tests |
 | `642c020` | set list stepping, slot actions and head tracking in the app model |
 | `da1a85d` | the set list panel and a scrolling window |
+| `0fe89b7` | the session and set list write-up in this log and the README |
+| `9c6768d` | the set list fixture's bank declared `var`, because stepping it is a mutation |
+| `18e0268` | the two set list assertions repaired, verified by run `42729742825` |
 
 Earlier analysis commits are listed in the analysis document itself.

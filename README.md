@@ -3,7 +3,6 @@
 Clean-room work on **Sunday Keys 2.5.2** (`com.sundaysounds.sundaykeys`, build 3367, macOS / Mac
 Catalyst, arm64): static analysis of the shipped binary, and an independent Swift implementation
 being built from what that analysis documents.
-
 Nothing here is produced by executing the original app, and no original source was consulted.
 
 ## Status
@@ -157,6 +156,12 @@ The panel shows every slot with its number, name and a `now` marker, plus `Play`
 `Remove` per slot and `Prev`, `Next`, `Add patch` and `Fill from bank` for the list. `PatchBank`
 format version 4 added the set list, and older banks load with an empty one.
 
+The milestone is verified by run
+[`42729742825`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42729742825): the debug
+build, every test suite including the set list ordering, persistence and set-list switching tests, the
+release build and the bootstrap smoke check all pass. `docs/progress.md` records that run and the
+earlier ones, including the two assertions it caught and why they were wrong rather than the model.
+
 ## Reproduce the analysis
 
 Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the app binary.
@@ -166,7 +171,6 @@ export GHIDRA_INSTALL_DIR=/path/to/ghidra_12.1.4_PUBLIC
 export GHIDRA_HEADLESS_MAXMEM=8G
 
 bash tools/bootstrap.sh --check
-
 lipo -thin arm64 "/Applications/Sunday Keys.app/Contents/MacOS/Sunday Keys" \
   -output /tmp/sundaykeys-arm64
 
