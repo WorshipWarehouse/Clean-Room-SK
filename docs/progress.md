@@ -25,6 +25,7 @@ this file tracks state.
 | Build, MIDI status tracking | the status follows the source list for as long as the client lives: a source appearing, disappearing or recovering updates it without pressing Start, and a refusal is kept only while it still applies | `Sources/SundayKeysCore/MIDI/MIDISourceTracker.swift`, `MIDIStatusBoard.refresh(with:)`, run `42737094402` |
 | Build, MIDI connect | the port's connect loop runs on a machine with no hardware: the probe publishes a virtual source, the engine enumerates it, the port connects it and the status says so | `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift`, `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift`, run `42740507134` |
 | Build, session scope | the patch that was playing is remembered beside the bank and resolved at launch with a named fallback, and the set-list head follows it | `Sources/SundayKeysCore/Session/SessionMemory.swift`, run `42819855234` |
+| Build, session relaunch | the bundle is started three times against one folder - the write, the relaunch and a hint naming a deleted patch - and each run's own lines are asserted | `tools/session_smoke.sh`, runs `42821991600` and `42821991761` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention, MIDI source tracking across refreshes | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
@@ -750,6 +751,37 @@ present, so the resume has been proven by unit tests and by the wired model comp
 suites passing, not by a relaunch; and no window has been seen, so the line it produces has
 been read in a test and never on a screen.
 
+## Relaunch milestone: a launch that resumes, proven on disk
+
+The resume was implemented and unit-tested, but no process had ever started the app
+twice against one Application Support folder, so the hint file had never been read
+back by a second launch. Runs `42821991600` and `42821991761` close that:
+`tools/session_smoke.sh` starts the bundle three times with one `HOME`, and each run
+has to print what it did.
+
+- **The write run** saves a bank of three patches and a hint naming the third, then
+  prints the folder it used, so the step reports which files the launch read.
+- **The relaunch** is a second process: `SessionProbe` constructs the same `AppModel` the
+  window constructs, so `loadBank`, `SessionScope.restore` and the head alignment run over
+  the files the first process left. It prints the status line, the selected patch and the
+  head's position, and the script requires `Resumed Rehearsal Pad, 3 patches and 3 set
+  list slots` and `play head on slot 3 of 3`.
+- **The missing-patch run** writes a hint naming a patch the bank does not have, and the
+  launch has to print `Opened Sunday Keys: the patch from the last launch is gone` and
+  stand on slot 1, so the fallback is a sentence and a position rather than a branch.
+- **The probe decides nothing.** It reports, and its exit status is a comparison of that
+  report against the expected value; the script asserts the printed lines too.
+
+The build run is green with the Swift suite at 13:10:31-13:10:34, and the session run is
+green with the probe at 13:10:30-13:10:33. The probe had to become its own workflow: the
+build workflow's token may delete a file under `.github/workflows` but may not create or
+update one, so adding the step there was rejected by the remote with `refusing to allow a
+GitHub App to create or update workflow`. That refusal is in run
+`42821552394` for anyone who wants to see it.
+
+What this does not prove: that a person sees the window open on the remembered patch.
+The probe proves the state the window is built from, on a machine with no display.
+
 ## Next actions, in order
 
 1. **A controller on a real Mac.** Every MIDI packet so far came from the probe's own virtual
@@ -761,9 +793,10 @@ been read in a test and never on a screen.
    device that sends running status, several messages per packet, or an active-sensing stream.
 3. **The panel status.** The MIDI status line and the routing behaviour have never been looked
    at on a screen; a window and a person are what is missing, not code.
-4. **A launch that resumes.** The restore path is unit-tested and wired into the model, but no
-   probe starts the app twice with a `session.json` present, so the on-disk resume has never
-   run end to end; a probe that writes a bank and relaunches from it is the missing piece.
+4. **A relaunch on a real Mac.** The on-disk resume runs in CI now: run
+   `42821991761` started the app three times against one folder, and the second launch
+   printed the resumed patch with the play head on its slot. What is still missing is a
+   person watching the window open on that patch, which needs the unreachable Mac.
 5. **Decompilation of the next targets** stays blocked on host access to the original binary;
    see `docs/re/access-determination.md`.
 

@@ -19,6 +19,7 @@ Nothing here is produced by executing the original app, and no original source w
 | MIDI connected in CI | the runner creates a CoreMIDI client and an input port, enumerates the source list, then publishes a virtual source of its own and lets the engine's own enumeration find it and connect it; the status reads `MIDI ready, 1 of 1 source(s) connected`, and a start with no source still says so instead of hiding it |
 | MIDI received in CI | the runner sends a note on, a note off and a control change from a virtual source into the app's own input port, and the app reports the three messages it parsed and the one of two enabled layers it routed the note to |
 | session resumed on launch | the patch that was playing is remembered in its own file beside the bank, so a relaunch opens where the service left off rather than at the first patch; a stale or unreadable hint falls back and says why |
+| relaunch proven on disk | run `42821991761` starts the bundle three times against one folder: one writes a bank and remembers the third patch, the next launch prints the resumed patch with the play head on its slot, and a hint naming a deleted patch falls back with its reason |
 | not yet verified on hardware | no controller has ever been connected and no person has seen the window; the only MIDI traffic the app has ever seen came from the probe's own virtual source |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
