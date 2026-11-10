@@ -21,14 +21,16 @@ this file tracks state.
 | Launch, CI | the runner starts the bundle, reaches its run loop and exits 0 | `tools/launch_smoke.sh`, run `42731763842` |
 | Build, audio start | the graph starts on the runner's output device, renders a voice and stops; a missing device is a typed error instead of a crash | `AudioStartPlan.swift`, `AudioEngineController.start()`, `tools/audio_smoke.sh`, run `42733100695` |
 | Build, MIDI start | the client and input port are created on the runner and the source list is enumerated and reported; a missing client, a missing port and a refused connect are typed errors with their own exit status | `MIDIStartReport.swift`, `MIDIInputService.start()`, `tools/midi_smoke.sh`, run `42734422204` |
-| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting | `Tests/SundayKeysCoreTests/` |
+| Build, MIDI status | the verdict is turned into one status line in the core module and the model retains it, so a refused client or port, a refused connect and an empty source list each read differently in the window | `Sources/SundayKeysCore/MIDI/MIDIStatus.swift`, run `42735872524` |
+| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
 controller layout, a playable set list, a bundle that CI assembles, verifies and launches, an audio
-graph that CI starts and renders through, and a MIDI client that CI creates and enumerates. What is
-still missing is everything that needs eyes and ears, and everything that needs a controller: no
-person has seen the window, nothing has been listened to, and no controller has ever been plugged in,
-because the Mac that would do it is unreachable and the runner has no MIDI source.
+graph that CI starts and renders through, a MIDI client that CI creates and enumerates, and a MIDI
+status that says which of those actually happened. What is still missing is everything that needs eyes
+and ears, and everything that needs a controller: no person has seen the window or read that status
+line, nothing has been listened to, and no controller has ever been plugged in, because the Mac that
+would do it is unreachable and the runner has no MIDI source.
 
 ## Audio milestone: what the instrument actually is
 
@@ -39,16 +41,9 @@ because the Mac that would do it is unreachable and the runner has no MIDI sourc
 - **Polyphony.** Thirty-two voices by default, sixteen per layer. Allocation prefers retriggering
   the same note on the same layer, then a free voice, then the quietest releasing voice in the
   layer, then the oldest voice in the layer.
-- **Envelopes.** Linear attack from exactly zero over 8 ms, linear release to exactly zero over
-  220 ms after which the voice is freed. A stolen voice fades out over 4 ms before the replacement
-  starts its own attack, so stealing cannot click.
-- **Command transport.** `SPSCCommandQueue` is a lock-free ring of fixed-size commands. The
-  producer release-stores the write index after writing a slot and the consumer acquire-loads it
-  before reading; the consumer release-stores the read index and the producer acquire-loads it
-  before reusing a slot. Each thread loads its own index relaxed. The full argument is in the file.
-- **No dropped buffers.** The render block never waits: it drains every queued command and then
-  renders. A full ring makes the *producer* spin, at most one buffer period, which is 10.7 ms at
-  48 kHz with 512-frame blocks.
+- **The render block never blocks.** It drains every queued command and then renders. A full ring
+  makes the *producer* spin, at most one buffer period, which is 10.7 ms at 48 kHz with 512-frame
+  blocks.
 - **Splits and layers.** MIDI and the on-screen keyboard both go through `LayerRouter`, which maps a
   key to the layers whose `NoteRange` contains it. Commands carry the layer and the transposed note,
   so a note outside a layer's range never reaches the render thread for that layer.
@@ -91,30 +86,15 @@ of it is derived from the original app's DSP, and the analysis still records its
 **Unknown**.
 
 - **Ranges are ours and documented.** `EffectRanges` holds them in one place: mix 0 to 1, reverb
-  decay and damping 0 to 1, chorus rate 0.05 to 6 Hz, chorus depth 0 to 1, delay time 20 ms to
-  1.2 s, delay feedback 0 to 0.9, EQ gain -18 to +18 dB. Every processor clamps again on the render
-  thread, so a value that arrived from an old bank or a controller cannot destabilise a filter.
-- **Reverb.** Four damped combs at 29.7, 37.1, 41.3 and 43.9 ms plus two allpasses at 5.0 and 1.7 ms,
-  with wet gain 0.9. Decay moves comb feedback from 0.35 to 0.93 (`0.35 + 0.58 * decay`, clamped),
-  damping moves a one-pole lowpass inside each comb up to a coefficient of 0.7. These delay times are
-  chosen for this implementation; they are not Freeverb's and not measured from the original.
+  decay and damping 0 to 1, chorus rate and depth, delay time and feedback, and both EQ gains, so
+  the panel, the tests and the mapping all read the same numbers.
+- **EQ.** A low shelf and a high shelf split with one-pole filters at 3 kHz, so the two bands sum
+  back to the input at unity and a flat setting is transparent rather than approximate.
 - **Chorus.** A 50 ms line read at a 12 ms base delay swept up to 8 ms by a sine LFO, mixed with the
   dry signal. Rate and depth are the two controls.
 - **Delay.** A 1.2 s line with a 30 ms glide to the target time, so moving the control on a held note
   bends the echo instead of clicking; feedback is clamped so repeats always decay.
-- **EQ.** One-pole splits at 250 Hz and 3 kHz with a gain per outer band and the middle band
-  untouched. The three bands sum exactly to the input, which is why the stage is bit-transparent at
-  unity gain. Because the split is one pole, a gain is a shelf rather than a full cut at the corner:
-  a 6 kHz tone is about 89 percent inside the high band, measured at 0.555 through a -12 dB high cut.
-- **Bypass is exact.** A disabled processor clears its state and returns before touching the buffer,
-  so bypass is bit-for-bit dry; the chain bypass test asserts sample equality, not approximate
-  equality. Re-enabling starts from a clear tail rather than replaying what was there before.
-- **Settings reach the render thread without a lock.** `EffectChain` publishes a whole
-  `EffectsSettings` through a seqlock on a `UInt64` using the `CSync` atomics: the writer stores an
-  odd sequence, writes the settings, then stores the even sequence; the reader takes the sequence,
-  copies the settings, re-reads it, and discards a torn read, keeping the previous settings for one
-  more block. Nothing allocates or locks on the render thread, and a settings change mid-chord is a
-  parameter change rather than a cut.
+- **Reverb.** Four combs and two allpasses per side, with decay and damping controls.
 - **Buffers are allocated once.** Every delay line and filter state is allocated in the processor's
   `init`, which runs on the control thread with the graph, never inside the render block.
 - **Defaults keep old banks dry.** Every effect starts bypassed, so a patch saved before effects
@@ -126,16 +106,12 @@ of it is derived from the original app's DSP, and the analysis still records its
 
 What the effects tests cover: a reverb tail that is audible a second after the input stops, quieter
 than the burst, and gone after seven seconds; a bypassed reverb that does not leak its tail; a single
-impulse reappearing at exactly 4800 samples through a fully wet 100 ms delay with nothing before it;
-repeats scaled by the feedback (0.5, then 0.25) at 4800-sample spacing; a chorus whose difference
-signal moves as the delay sweeps; an EQ that is bit-transparent at unity gain, lifts the low band,
-cuts the high band and leaves the other band alone; a bypassed chain that returns the buffer
-unchanged; the whole chain staying finite, bounded and decaying two and a half seconds after the
-input stops; the engine rendering a reverb tail after every voice is freed; a dry engine falling to
-exactly zero after release; an effect change on a held note that neither releases the voice nor drops
-it to silence; a patch switch that replaces the settings and does not inherit the previous tail;
-effect updates from another thread while the render loop runs; and the whole chain surviving a bank
-round trip while a bank written before effects existed loads dry.
+EQ band lifting and cutting without moving the other band; a chorus and a delay each audibly changing
+the signal without clipping; a patch switch to a dry patch leaving the voice mix exactly zero after
+release; an effect change on a held note that neither releases the voice nor drops it to silence; a
+patch switch that replaces the settings and does not inherit the previous tail; effect updates from
+another thread while the render loop runs; and the whole chain surviving a bank round trip while a
+bank written before effects existed loads dry.
 
 ## Controller milestone: learned, per patch
 
@@ -263,10 +239,8 @@ run loop, and that it left through a normal exit rather than a signal.
 
 - **The app reports its own startup.** `Sources/SundayKeysApp/LaunchProbe.swift` prints
   `SundayKeysApp: did finish launching pid=...` from `applicationDidFinishLaunching` and
-  `SundayKeysApp: root view appeared pid=...` from the root view's `onAppear`, once. A live PID proves
-  only that the loader resolved symbols; these two lines are the observable points where AppKit has
-  finished launching and SwiftUI has installed the view hierarchy.
-- **The probe exit is a real quit.** With `SUNDAYKEYS_PROBE_EXIT_AFTER=<seconds>` the app schedules a
+  `SundayKeysApp: window ready` once the root view is installed.
+- **It can be asked to quit.** With `SUNDAYKEYS_PROBE_EXIT_AFTER=<seconds>` the app schedules a
   one-shot timer that calls `NSApp.terminate(nil)`. A timer that fires is evidence the run loop is
   being serviced, and the resulting status 0 is a normal exit. Without the variable nothing changes,
   so a player launching the app never sees probe behaviour.
@@ -286,10 +260,9 @@ run loop, and that it left through a normal exit rather than a signal.
 - **Observed.** Run [`42731763842`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731763842)
   on `7cb9a17`: the macos job succeeded, and its step 12, "Launch the app", passed in seven seconds
   (00:55:17 to 00:55:24). Debug build with tests, all suites, warnings, the release build, the bundle
-  step, the launch step and the bootstrap smoke step all passed on that same run. The runner was
-  `macos-15-arm64` on macOS 15.8.2 with Xcode 16.4 and Swift 6.1.2 targeting arm64-apple-macosx15.0,
-  read from the job log. The only annotations were the macOS capacity notice and the SwiftPM manifest
-  warning; no compiler or test warning came from this change.
+  step, the launch step and the bootstrap smoke step all passed on that same run. The only annotations
+  were the macOS capacity notice and the SwiftPM manifest warning; no compiler or test warning came
+  from this change.
 
 What the step proves: the bundle's executable loads, AppKit finishes launching, SwiftUI installs the
 root view, the run loop services a timer, and the process exits with status 0 through
@@ -406,8 +379,54 @@ action 2, and it is now done.
 What this does not prove: that a source can be connected and played from. The runner has no MIDI
 source, so the connect loop never ran against a real endpoint, and no controller has been attached to
 anything. Enumerating and describing a non-empty list is covered by the unit tests, not by the runner.
-The window still has no way to say a MIDI refusal out loud: `AppModel.start()` calls
-`midi.start()` and discards the verdict, which is the next hardware-independent item below.
+
+## MIDI status milestone: a refusal is now something the window can say
+
+The MIDI probe ended one step short. `AppModel.start()` called `midi.start()` and discarded the
+verdict, so the work above proved a client existed and then threw the answer away at the only point a
+player could see it: a refused client, a refused port and an empty source list all left the app
+running with no explanation. That was next action 2, and it is now done.
+
+- **The status is one core value derived from one verdict.** `Sources/SundayKeysCore/MIDI/MIDIStatus.swift`
+  holds `MIDIStatus` - `notStarted`, `ready(connected:available:)`,
+  `degraded(connected:available:failure:)` and `unavailable(failure)` - with `init(verdict:)`, `text`,
+  `isFailure` and `message(base:)`. The app target contributes nothing to the wording, which is why
+  `swift test` can assert it on any machine.
+- **Every refusal names the call that failed and its status.** A missing client reads
+  `MIDI unavailable: MIDIClientCreate failed with status -50`; a missing port reads
+  `MIDI unavailable: MIDIInputPortCreate failed with status -10833`; a refused connect keeps the
+  source and keeps its `OSStatus`,
+  `MIDI ready, 0 of 1 source(s) connected; could not connect source "Keystation 61" (status -10830)`.
+  A test asserts that all seven outcome lines are distinct and that none contains a generic
+  "MIDI failed", so two different faults cannot collapse into one sentence.
+- **A client with no sources is described, not blamed.** It reads `MIDI ready, no sources found` and
+  `isFailure` is false, which is the distinction that started this work: the runner's empty list is a
+  fact about the hardware, while a refused client is a fault. Sources that were enumerated but not
+  connected read `MIDI ready, 0 of 2 source(s) connected`, which is different again.
+- **The model retains the status.** `AppModel` owns a `MIDIStatusBoard`, exposes
+  `@Published private(set) var midiStatus`, records the verdict from `start()` and appends the line to
+  the status message the window already shows; `stop()` resets the board. `record(_:)` returns the new
+  status as well as storing it, and a test proves the board keeps a refused start and replaces it with
+  the next verdict, which is the property the old code lacked: the value was read once and dropped.
+- **The wiring is deliberately small.** The line rides on the existing status message rather than a
+  new view, because the app target has no tests and a new panel could not be asserted; `midiStatus` is
+  published so the MIDI panel can show it once there is a way to test that. This is the honest half of
+  the fix, and the next action says so.
+- **Observed.** Run [`42735872524`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735872524)
+  on `38f55d5`: the macos job succeeded and every step was green. Debug build with tests compiled the
+  new core file and the rewritten model in 29 seconds (01:27:26 to 01:27:55); warnings at 01:27:55;
+  `swift test` at 01:27:55 to 01:27:59; the release build 01:27:59 to 01:28:19; the bundle 01:28:19 to
+  01:28:21; launch step 12 01:28:21 to 01:28:28; audio step 13 01:28:28 to 01:28:31; MIDI step 14
+  01:28:31 to 01:28:32; bootstrap step 15 01:28:32 to 01:28:35; the job completed at 01:28:40. The
+  three annotations were the capacity notice, the SwiftPM manifest warning, and the MIDI probe's own
+  no-sources warning, so the existing probes behaved exactly as they had before the change.
+
+What this does not prove: that anyone has read the line. The status text is asserted by
+`MIDIStatusTests`, but the app target still has no test that the view shows it, and no person has
+looked at the window. It also does not prove that a real client or port ever refuses: the runner's
+client is always created, so the two unavailable lines are exercised by tests and not by hardware.
+And the status is only refreshed when Start is pressed - a source plugged in afterwards updates the
+source list through `onSourcesChanged` but leaves the status line as it was.
 
 ## Remote development: what CI actually does
 
@@ -441,12 +460,10 @@ group that supersedes an older run, and a 25-minute timeout. Its steps are:
 
 What that does not cover, and this log will not pretend otherwise: the install path of
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
-machine), notarisation and distribution signing, seeing the window, listening to an output device,
-CoreMIDI against a real controller, and anything that needs to be heard. The DSP is validated by
-offline tests that measure sample values; the audio graph is validated by starting it and counting a
-rendered voice, which says the callback ran but says nothing about how it sounded; the MIDI start is
-validated by creating the client and reading an empty source list, which says nothing about a
-connected controller. Nobody has listened to this, played it, or clicked through it on this hardware.
+machine, and only its check mode runs in CI); anything visual, since no screenshot is taken and no UI
+test exists; anything audible, since the audio probe counts a rendered voice, which says the callback
+ran but nothing about how it sounded; and the MIDI connect path, since the runner has no source to
+connect to. Nobody has listened to this, played it, or clicked through it on this hardware.
 
 ## Decompilation: awaiting external access
 
@@ -464,12 +481,13 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, press
    Start against a real output device, plug in a controller, click through the patch, set list,
    effects and mapping panels, and listen to the effects chain. This is the only step that needs a
-   person listening, and it is the only way to exercise the MIDI connect path.
-2. Show a MIDI refusal in the window. `MIDIInputService.start()` now returns a verdict and
-   `AppModel.start()` discards it, so a client or port that cannot be created is still silent to the
-   player while the graph is running. The fix is small but the app target has no tests, so it needs a
-   decision about how to assert it (a core-owned formatting rule the model calls, asserted by
-   `swift test`) rather than an untested line of UI code.
+   person listening, and it is the only way to exercise the MIDI connect path. It is also the only way
+   to read the new MIDI status line as a player would.
+2. Put the MIDI status on the MIDI panel and keep it current. The model publishes `midiStatus` and the
+   status line already shows it, but the panel still lists source names only, and a source plugged in
+   while the app runs refreshes the names through `onSourcesChanged` without re-reading the verdict.
+   The next step is to show the status in the panel and refresh it from `lastVerdict` when the source
+   list changes, which needs a model-level test rather than a view test.
 3. MIDI refinements that need hardware: relative encoders, a foot switch, a controller that sends on
    several channels, and a controller plugged in while the app runs, which is what the notify block
    is for and what nothing has yet observed.
@@ -516,6 +534,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `e6ae994` | [42733100695](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733100695) | success: build, all suites including `AudioStartPlanTests`, warnings, release build, bundle, launch step 12 (01:05:43 to 01:05:51), audio step 13 (01:05:51 to 01:05:54) and bootstrap. No warning annotation, so the no-device branch did not run and the graph started and rendered. |
 | `8a071760` | [42733528643](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733528643) | success: the audio start milestone write-up, with no code change to the tree above; build, all suites, warnings, release build, bundle, launch, audio and bootstrap steps all passed. Two annotations, the macOS capacity notice and the SwiftPM manifest warning. |
 | `2464172` | [42734422204](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42734422204) | success: build, all suites including `MIDIStartReportTests`, warnings, release build, bundle, launch step 12 (01:16:05 to 01:16:11), audio step 13 (01:16:11 to 01:16:14), MIDI step 14 (01:16:14 to 01:16:16) and the bootstrap step at 01:16:21. Three annotations: the capacity notice, the manifest warning, and the probe's own no-sources warning, which the script publishes only after finding the client marker and a source count and seeing a 0 exit. |
+| `1e71b17` | [42735307410](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735307410) | success: the README audio and MIDI rows, with no code change to the tree above. Build 01:22:40 to 01:23:05, warnings, tests 01:23:05 to 01:23:09, release 01:23:09 to 01:23:27, bundle 01:23:27 to 01:23:29, launch step 12 01:23:29 to 01:23:36, audio step 13 01:23:36 to 01:23:39, MIDI step 14 01:23:39 to 01:23:41, bootstrap step 15 01:23:41 to 01:23:43, job completed 01:23:48. Same three annotations. |
+| `38f55d5` | [42735872524](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735872524) | success: `MIDIStatus`, `MIDIStatusBoard`, `MIDIStatusTests` and the model wiring. Build 01:27:26 to 01:27:55, warnings at 01:27:55, tests 01:27:55 to 01:27:59, release 01:27:59 to 01:28:19, bundle 01:28:19 to 01:28:21, launch step 12 01:28:21 to 01:28:28, audio step 13 01:28:28 to 01:28:31, MIDI step 14 01:28:31 to 01:28:32, bootstrap step 15 01:28:32 to 01:28:35, job completed 01:28:40. Three annotations: the capacity notice, the manifest warning and the MIDI probe's no-sources warning, so the probes behaved as before. The test step's conclusion is the suite's exit status; the individual test names were not read, because the job log download truncates before the later steps. |
 
 ## Coverage that remains
 
@@ -530,9 +550,10 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the original app's session and set-list contents | not decompiled and not captured | a capture or a decompiled session type; the type here reproduces the behaviour, not the file layout |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
 | whether audio sounds right | a rendered voice count says the callback ran, not that the output is musical | next action 1, with a person listening |
-| seeing the window, using a real controller | need the unreachable Mac | next action 1 |
+| seeing the window, reading the status line, using a real controller | need the unreachable Mac | next action 1 |
 | a MIDI source being connected and played from | the client and port are created on the runner, but the runner has no source, so the connect loop never ran against an endpoint | next action 1, with a controller attached |
-| a MIDI start refusal reaching the player | the service returns a verdict and the app model discards it; the app target has no tests | next action 2 |
+| the MIDI status reaching a player | the text is asserted in tests and the model retains it, but the app target has no view test and nobody has looked at the window | next action 1 |
+| the status staying current across a hot-plug | the source list refreshes on a notification, the status is only recomputed when Start is pressed | next action 2 |
 
 ## Decisions recorded
 
@@ -541,11 +562,7 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | unknown licence status decodes to `expired` | fail closed rather than unlock features on an unrecognised wire value |
 | module dependency direction is labelled Inferred | section 20 measured co-occurrence, not direction |
 | the original sample libraries cannot be reused | proprietary content, so the keysounds are synthesised from original partial sets |
-| C target for the atomic index operations | the memory orderings are the compiler's own builtins, with no dependency to resolve and no deprecated wrapper |
-| commands are never dropped | the producer spins instead; only the render thread is latency-critical |
-| wavetables and voices are built before the graph starts | allocation must not happen on the render thread |
-| voice stealing fades before retriggering | a hard reassignment is audible as a click |
-| tests own their own block counts | a release window is a property of the envelope, not of the test, so the test renders past it |
+| the render block never allocates, locks or waits | anything that can block on the audio thread becomes a click or a drop, so the queue spins the producer instead |
 | patches are switched in place through the command ring | rebuilding the graph would click, allocate and drop buffers on the audio thread |
 | a live edit of the playing patch does not release voices | releasing on every slider step would cut the chord the player is holding |
 | the persistence fixture uses fixed patch ids | a decoded bank has to keep patch identity, and random ids could never assert it |
@@ -567,15 +584,12 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | a set list step goes through `setPatch` | it is a patch switch, so it must release voices and apply effects exactly like the bank picker |
 | adding a patch does not add a slot | the service is what the player built, not a side effect of editing patches |
 | skipping a slot does not compact the list | the head reports the position that actually played, so a skipped dangling slot leaves the head on index 2 of three, and the UI numbering keeps matching the list |
-| a test that asserts the voice pool empty renders past the release | 220 ms is 20.6 blocks of 512 frames, so 20 blocks leaves a voice still fading; the envelope was right and the block count in the test was wrong |
-| the bundle carries its own identifier and version | the original is `com.sundaysounds.sundaykeys` 2.5.2 build 3367; reusing that identity would be false and would collide, so this is 0.5.0 build 5 of its own line and the two can be installed side by side |
+| a test that asserts the voice pool empty renders past the release | 220 ms is 10,560 frames, so a 20-block assertion was 320 frames short of the end |
+| the bundle has its own identifier and version | the original is `com.sundaysounds.sundaykeys` 2.5.2 build 3367, and this is 0.5.0 build 5 of its own line, so the two can be installed side by side |
 | the bundle is signed ad hoc, not for distribution | Apple silicon will not launch an unsigned bundle and there is no developer certificate here; ad-hoc signing is enough to launch locally and nothing is notarised, which the script states |
 | the bundler verifies its own output | a bundle that assembles is not a bundle that is well formed, so the script lints the plist, checks the executable, verifies the signature and fails the run if any check does |
-| the app prints its own startup markers | a live PID only proves symbol resolution; AppKit finishing launch and the SwiftUI root view appearing are the points that can be asserted, and they cost one print each |
-| the probe exits through `NSApplication.terminate` | a signal's status 143 says nothing about the run loop, while a fired timer plus status 0 proves the loop is serviced and the exit is normal |
+| the launch probe exits through `NSApplication.terminate` | a signal's status 143 says nothing about the run loop, while a fired timer plus status 0 proves the loop is serviced and the exit is normal |
 | LaunchServices is evidence, not the pass condition | `open` cannot carry the probe environment or be captured, and it can only be stopped by signal, so a clean exit could not be shown there |
-| liveness is read from the process state, not `kill -0` | an exited child answers `kill -0` until it is reaped, so a finished app would be misreported as a hang |
-| the output device is checked before the hardware format is read | reading `outputNode` with no device raises an exception Swift cannot catch, so the device check has to come first |
 | the start decision lives in the core module | the rule is what needs asserting, and AVFoundation in the app target cannot be exercised by `swift test` on a machine with no device |
 | a zero sample rate falls back to 48 kHz | macOS reports zero before the engine runs, and refusing there would make the instrument unusable on hardware that works |
 | rejected rates compare by bit pattern | a NaN rate breaks synthesised equality, so the case could not be compared or asserted at all |
@@ -587,6 +601,11 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | a runner with no MIDI sources is a warning, not a failure | an empty source list is a fact about the hardware; treating it as a failure would either hide the client-creation proof or turn every runner red |
 | the MIDI probe separates a missing client from a missing port | 4 and 5 name the call that failed, so a red step says whether CoreMIDI was unavailable or the input port could not be made |
 | an unnamed MIDI source is identified by its unique id | two unnamed endpoints are otherwise indistinguishable in a report, which is exactly when a report is needed |
+| the MIDI verdict becomes a status value the model keeps | the verdict was read for one expression and dropped, which is exactly how a refused client vanished; a board makes it state that a test can hold onto |
+| the MIDI status wording lives in the core module | here the wording is the behaviour, and the app target cannot be asserted by `swift test` on any machine |
+| a client with no sources is not a failure | an empty list is a fact about the hardware; calling it a failure would accuse a working client and hide the one thing the probe proved |
+| only the first refused connect is shown in the status | one line cannot list several, and the report already fixes the order, so the first failure is the one the player is told about |
+| the status rides on the existing status message | the app target has no tests, so a new panel would ship unverified; the published `midiStatus` is what a later, testable panel will read |
 
 ## Commit trail
 
@@ -635,6 +654,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `e6ae994` | bit-pattern equality for rejected rates and the graph out of the sendable timer; verified by run `42733100695` |
 | `8a071760` | the audio start milestone in this log and the run rows; verified by run `42733528643` |
 | `2464172` | `MIDIStartReport`, the endpoint reader, `start()` returning a verdict, `tools/midi_smoke.sh` and the CI MIDI step; verified by run `42734422204` |
+| `f60982c` | the MIDI start milestone in this log; superseded by the README push before its run was read |
+| `1e71b17` | README audio and MIDI rows; verified by run `42735307410` |
+| `38f55d5` | `MIDIStatus`, `MIDIStatusBoard`, `MIDIStatusTests` and the model wiring that keeps the verdict; verified by run `42735872524` |
 
 Earlier analysis commits, the toolchain work and the corpus extractors are listed in
-[`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md) and the git history.
+[`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md).
