@@ -59,8 +59,8 @@ home="$logdir/home"
 mkdir -p "$home"
 
 printf '== patch transfer probe ==\n'
-printf 'bundle         %s\n'
-printf 'home           %s\n\n' "$home" "$app"
+printf 'bundle         %s\n' "$app"
+printf 'home           %s\n\n' "$home"
 
 HOME="$home" SUNDAYKEYS_PROBE_PATCH_TRANSFER=1 SUNDAYKEYS_PROBE_EXIT_AFTER=20 "$exe" >"$log" 2>&1 &
 pid=$!

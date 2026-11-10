@@ -354,6 +354,43 @@ final class AppModel: ObservableObject {
         bankStatus = "Unbound \(target.label), not saved yet"
     }
 
+
+    // MARK: - Patch transfer
+
+    /// The last thing the transfer buttons did, in the window's own words.
+    @Published private(set) var transferStatus = "No patch exported yet"
+
+    /// Writes the playing patch beside the bank, so one sound can be carried to
+    /// another Mac without taking the rest of the bank with it.
+    func exportPlayingPatch() {
+        let url = PatchTransfer.defaultURL(for: patch.name)
+        do {
+            try PatchTransfer.write(patch, to: url)
+            let bytes = (try? Data(contentsOf: url).count) ?? 0
+            transferStatus = "Exported \(patch.name) to \(url.lastPathComponent), \(bytes) bytes"
+        } catch {
+            transferStatus = "Could not export \(patch.name): \(error)"
+        }
+    }
+
+    /// Reads that file back and adds it without overwriting a patch the bank already
+    /// holds: a colliding id gets a fresh one and a colliding name a suffix, so the
+    /// sound under the player's hands never changes when they import.
+    func importPatch() {
+        let url = PatchTransfer.defaultURL(for: patch.name)
+        do {
+            let incoming = try PatchTransfer.read(from: url)
+            let adopted = PatchAdoption.adopt(incoming, into: &bank)
+            selectedPatchID = adopted.id
+            audio.setPatch(adopted)
+            rememberSelection()
+            bankStatus = "Imported \(adopted.name), not saved yet"
+            transferStatus = "Imported \(adopted.name) from \(url.lastPathComponent)"
+        } catch {
+            transferStatus = "Could not import from \(url.lastPathComponent): \(error)"
+        }
+    }
+
     // MARK: - Persistence
 
     func saveBank() {

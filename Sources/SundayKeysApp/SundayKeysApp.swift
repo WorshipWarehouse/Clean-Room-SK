@@ -19,6 +19,7 @@ struct SundayKeysApp: App {
                     // the one the Start button builds, and with the variable unset it does
                     // nothing at all.
                     MetronomeProbe.probeIfRequested()
+                    PatchTransferProbe.probeIfRequested()
                 }
         }
     }

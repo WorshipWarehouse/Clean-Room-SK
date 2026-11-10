@@ -41,6 +41,8 @@ struct ContentView: View {
 
                 patchSection
 
+                PatchTransferSection(model: model)
+
                 SetlistSection(model: model)
 
                 effectsSection
