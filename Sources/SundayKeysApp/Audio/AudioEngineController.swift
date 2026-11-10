@@ -32,6 +32,14 @@ final class AudioEngineController {
     private(set) var isRunning = false
     private(set) var sampleRate: Double = 0
 
+    /// The voices the note path reaches, when a build of this controller was given them.
+    ///
+    /// In the app this is nil and `start()` builds the real engine; a test passes a recorder so
+    /// the one decision this type makes - whether a note may start - can be asserted by what did
+    /// or did not arrive, with no device and no render thread. It is not a feature switch: there is
+    /// no way to set it after construction, and the app never does.
+    private let voiceOverride: (any KeysoundVoicing)?
+
     /// The one permission every sounding request passes through.
     ///
     /// Keys, the MIDI transport and the arpeggiator all arrive at `noteOn`, so enforcing
@@ -43,6 +51,16 @@ final class AudioEngineController {
     /// How many notes the gate turned away, so a probe or a diagnostic can see that the
     /// gate refused instead of having to infer it from silence.
     private(set) var refusedNotes = 0
+
+    init(voice: (any KeysoundVoicing)? = nil) {
+        voiceOverride = voice
+    }
+
+    /// Whatever actually holds the voices: the recorder a test passed, or the graph the last
+    /// `start` built. Nil while stopped with no override, where every note call is a no-op.
+    private var sounding: (any KeysoundVoicing)? {
+        voiceOverride ?? keysound
+    }
 
     var activeVoices: Int {
         keysound?.voiceCount ?? 0
@@ -174,23 +192,28 @@ final class AudioEngineController {
 
     /// The one place a voice can start.
     ///
-    /// The gate is checked before the engine is touched, so a refused note costs nothing and
-    /// the count records that a request arrived and was turned away rather than never made.
-    /// A refusal does not stop the click or the engine: the app keeps running with the
-    /// licensed sound set withheld, which is the downgrade the analysis documents.
+    /// The gate is checked before the voices are touched, so a refused note costs nothing and the
+    /// count records that a request arrived and was turned away rather than never made. A refusal
+    /// does not stop the click or the engine: the app keeps running with the licensed sound set
+    /// withheld, which is the downgrade the analysis documents.
+    ///
+    /// Every entry point in the app reaches this call: the on-screen keys and the MIDI transport
+    /// through `AppModel`, and the arpeggiator through `KeysoundNoteTarget`, which is declared on
+    /// this type. `SundayKeysAppTests` drives this method with an expired and an unreadable
+    /// standing and asserts nothing reached the voices.
     func noteOn(note: UInt8, velocity: UInt8) {
         guard licenceGate.permitsPlayback else {
             refusedNotes += 1
             return
         }
-        keysound?.noteOn(note: note, velocity: velocity)
+        sounding?.noteOn(note: note, velocity: velocity)
     }
 
     func noteOff(note: UInt8) {
-        keysound?.noteOff(note: note)
+        sounding?.noteOff(note: note)
     }
 
     func allNotesOff() {
-        keysound?.allNotesOff()
+        sounding?.allNotesOff()
     }
 }
