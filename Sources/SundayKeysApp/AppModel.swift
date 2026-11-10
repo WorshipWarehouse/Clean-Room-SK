@@ -18,6 +18,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var selectedPatchID = Patch.starterID
     @Published private(set) var bankStatus = "Starter bank"
 
+    /// The target waiting for a control change, if the player pressed Learn.
+    @Published private(set) var learningTarget: ControllerTarget?
+
     private let audio = AudioEngineController()
     private let midi = MIDIInputService()
     private let store = PatchStore(url: PatchStore.defaultURL())
@@ -38,6 +41,11 @@ final class AppModel: ObservableObject {
 
     var layers: [KeyLayer] {
         patch.layers
+    }
+
+    /// Every control the current patch can bind, in the order the panel shows them.
+    var controllerTargets: [ControllerTarget] {
+        ControllerTarget.all(for: layers)
     }
 
     func start() {
@@ -69,16 +77,18 @@ final class AppModel: ObservableObject {
         isEngineRunning = false
         voiceCount = 0
         heldNotes.removeAll()
+        learningTarget = nil
         statusMessage = "Engine stopped"
     }
 
     // MARK: - Patches
 
-    /// Switching patch swaps routing, timbres and effects and releases what is
-    /// sounding, so a key held through the switch cannot hang on a layer the new
-    /// patch dropped.
+    /// Switching patch swaps routing, timbres, effects and the controller layout,
+    /// and releases what is sounding, so a key held through the switch cannot hang
+    /// on a layer the new patch dropped.
     func selectPatch(_ id: UUID) {
         guard id != selectedPatchID, bank.index(of: id) != nil else { return }
+        learningTarget = nil
         selectedPatchID = id
         audio.setPatch(patch)
         lastEvent = "patch \(patch.name)"
@@ -170,6 +180,30 @@ final class AppModel: ObservableObject {
         bankStatus = "Edited effects on \(patch.name), not saved yet"
     }
 
+    // MARK: - Controller mapping
+
+    func binding(for target: ControllerTarget) -> ControllerBinding? {
+        patch.controllerMapping.binding(for: target)
+    }
+
+    /// Learning waits for the next control change, because the only way to know
+    /// which physical knob the player means is to have them move it.
+    func beginLearning(_ target: ControllerTarget) {
+        learningTarget = target
+        bankStatus = "Move a controller to bind \(target.label)"
+        lastEvent = "learning \(target.label)"
+    }
+
+    func cancelLearning() {
+        learningTarget = nil
+        bankStatus = "Learning cancelled"
+    }
+
+    func clearBinding(_ target: ControllerTarget) {
+        updateSelectedPatch(appliesToEngine: false) { $0.controllerMapping.unbind(target) }
+        bankStatus = "Unbound \(target.label), not saved yet"
+    }
+
     // MARK: - Persistence
 
     func saveBank() {
@@ -217,6 +251,18 @@ final class AppModel: ObservableObject {
             transform(&patch.layers[index])
         }
         bankStatus = "Edited \(patch.name), not saved yet"
+    }
+
+    /// Applies a control change to the playing patch. It goes through the same
+    /// no-release path as a slider, so turning a knob cannot cut a held chord.
+    private func applyController(controller: UInt8, value: UInt8, channel: UInt8) {
+        guard let index = bank.index(of: selectedPatchID) else { return }
+        var edited = bank.patches[index]
+        guard edited.apply(controllerValue: value, fromController: controller, channel: channel) != nil else {
+            return
+        }
+        bank.patches[index] = edited
+        audio.setPatch(edited, releasingVoices: false)
     }
 
     private func uniqueName(based name: String) -> String {
@@ -279,7 +325,19 @@ final class AppModel: ObservableObject {
             audio.noteOff(note: note)
             lastEvent = "note off \(noteName(note)) ch \(channel + 1)"
         case let .controlChange(controller, value, channel):
-            lastEvent = "cc \(controller) = \(value) ch \(channel + 1)"
+            if let target = learningTarget {
+                learningTarget = nil
+                updateSelectedPatch(appliesToEngine: false) { patch in
+                    patch.controllerMapping.bind(controller: controller, channel: channel, to: target)
+                }
+                bankStatus = "Bound cc \(controller) to \(target.label), not saved yet"
+                lastEvent = "learned cc \(controller) -> \(target.label)"
+            } else {
+                lastEvent = "cc \(controller) = \(value) ch \(channel + 1)"
+            }
+            // Learning also applies the value that taught it, so the player hears
+            // where the control already was instead of waiting for the next move.
+            applyController(controller: controller, value: value, channel: channel)
         case let .programChange(program, channel):
             // A program change selects the patch with that index, which is how a
             // controller or a foot switch walks the bank.

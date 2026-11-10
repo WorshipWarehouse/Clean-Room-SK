@@ -39,6 +39,8 @@ struct ContentView: View {
 
             effectsSection
 
+            ControllerSection(model: model)
+
             KeyboardView(model: model)
                 .frame(height: 150)
 
@@ -56,7 +58,7 @@ struct ContentView: View {
             Spacer()
         }
         .padding(24)
-        .frame(minWidth: 900, minHeight: 760)
+        .frame(minWidth: 900, minHeight: 900)
     }
 
     private var patchSection: some View {
@@ -302,6 +304,71 @@ struct ContentView: View {
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 42, alignment: .trailing)
         }
+    }
+}
+
+/// The controller layout of the selected patch. Learning works by pressing Learn
+/// and then moving the control, because a CC number alone does not say which knob
+/// the player is holding.
+struct ControllerSection: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        GroupBox("Controller mapping") {
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(model.controllerTargets, id: \.self) { target in
+                    ControllerRow(target: target, model: model)
+                }
+
+                Text(
+                    model.learningTarget == nil
+                        ? "Each patch keeps its own layout; Save keeps it too."
+                        : "Waiting for a control change on any channel."
+                )
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(model.learningTarget == nil ? .secondary : .orange)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+}
+
+struct ControllerRow: View {
+    let target: ControllerTarget
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Text(target.label)
+                .frame(width: 150, alignment: .leading)
+                .font(.system(.caption, design: .monospaced))
+
+            Text(assignment)
+                .frame(width: 110, alignment: .leading)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            if model.learningTarget == target {
+                Text("move a control...")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.orange)
+                Button("Cancel") { model.cancelLearning() }
+            } else {
+                Button("Learn") { model.beginLearning(target) }
+                Button("Clear") { model.clearBinding(target) }
+                    .disabled(model.binding(for: target) == nil)
+            }
+
+            Spacer()
+        }
+    }
+
+    /// Shows the CC and the channel, or nothing when the control is unassigned.
+    private var assignment: String {
+        guard let binding = model.binding(for: target) else { return "unassigned" }
+        let channel = binding.channel.map { "ch \(Int($0) + 1)" } ?? "any ch"
+        return "cc \(binding.controller) \(channel)"
     }
 }
 
