@@ -2,21 +2,23 @@ import Darwin
 import Foundation
 
 /// The keysound engine the app talks to: producer-side routing plus the
-/// render-side drain.
+/// render-side drain, followed by the patch's effect chain.
 ///
-/// `noteOn`, `noteOff` and `setPatch` run on the MIDI thread or the main thread,
-/// serialised by the caller so there is exactly one producer, which is the same
-/// contract the SPSC ring already requires. They map the played key through
+/// `noteOn`, `noteOff`, `setPatch` and `setEffects` run on the MIDI thread or the
+/// main thread, serialised by the caller so there is exactly one producer, which is
+/// the same contract the SPSC ring already requires. They map the played key through
 /// `LayerRouter` and enqueue one command per layer, so a disabled layer or a note
 /// outside a layer's range never reaches the render thread for that layer at all.
 ///
-/// `render` runs on the audio thread: it drains every pending command and then
-/// renders the block. Nothing is ever dropped. If the ring is momentarily full the
-/// producer spins in its own thread until the render thread drains it, which costs
-/// at most one buffer period; the render thread itself never waits.
+/// `render` runs on the audio thread: it drains every pending command, renders the
+/// voices, then runs the effect chain over the block. Nothing is ever dropped. If the
+/// ring is momentarily full the producer spins in its own thread until the render
+/// thread drains it, which costs at most one buffer period; the render thread itself
+/// never waits.
 public final class RealtimeKeysoundEngine {
     public private(set) var patch: Patch
     public let instrument: PolyphonicInstrument
+    public let effects: EffectChain
 
     private var router: LayerRouter
     private let queue: SPSCCommandQueue
@@ -33,6 +35,7 @@ public final class RealtimeKeysoundEngine {
         let initial = Patch(name: "Initial", layers: layers)
         patch = initial
         router = LayerRouter(layers: layers)
+        effects = EffectChain(sampleRate: sampleRate)
         instrument = PolyphonicInstrument(
             sampleRate: sampleRate,
             layers: layers,
@@ -41,6 +44,7 @@ public final class RealtimeKeysoundEngine {
         )
         queue = SPSCCommandQueue(capacity: queueCapacity)
         self.curve = curve
+        effects.apply(settings: initial.effects)
     }
 
     public var voiceCount: Int {
@@ -50,19 +54,20 @@ public final class RealtimeKeysoundEngine {
     /// Switches the whole patch in one step.
     ///
     /// Routing changes immediately on the producer side, so the next keystroke uses
-    /// the new ranges, transposes, gains and enabled states. The new timbres are
-    /// published to the render thread through the same lock-free ring as notes, so
-    /// no lock or allocation is introduced on the audio path.
+    /// the new ranges, transposes, gains and enabled states. The new timbres and the
+    /// new effect settings are published to the render thread without a lock, so no
+    /// allocation is introduced on the audio path.
     ///
     /// `releasingVoices` is what keeps a key held across a switch from hanging on a
     /// layer that no longer exists, and because release is a 220 ms fade rather
     /// than a cut, the change is heard as a tail under the new patch. A live edit
-    /// of the patch already being played passes `false`: ranges and timbres still
-    /// update, but the chord under the player's hands keeps sounding, because
+    /// of the patch already being played passes `false`: ranges, timbres and effects
+    /// still update, but the chord under the player's hands keeps sounding, because
     /// releasing it on every slider step would be heard as a cut.
     public func setPatch(_ newPatch: Patch, releasingVoices: Bool = true) {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
+        effects.apply(settings: newPatch.effects)
 
         var index = 0
         while index < newPatch.layers.count {
@@ -78,6 +83,13 @@ public final class RealtimeKeysoundEngine {
         if releasingVoices {
             enqueue(RenderCommand(kind: .allNotesOff))
         }
+    }
+
+    /// Producer side. Publishes new effect settings and keeps the patch's copy in
+    /// step, without touching a single voice.
+    public func setEffects(_ settings: EffectsSettings) {
+        patch.effects = settings
+        effects.apply(settings: settings)
     }
 
     public func noteOn(note: UInt8, velocity: UInt8) {
@@ -127,7 +139,9 @@ public final class RealtimeKeysoundEngine {
         return false
     }
 
-    /// Render thread only. Drains the queue, then renders the block.
+    /// Render thread only. Drains the queue, renders the voices, then processes the
+    /// patch's effects over the finished block so every voice is heard through the
+    /// same chain.
     public func render(into buffer: UnsafeMutableBufferPointer<Float>, frameCount: Int) {
         var command = queue.pop()
         while let current = command {
@@ -135,5 +149,6 @@ public final class RealtimeKeysoundEngine {
             command = queue.pop()
         }
         instrument.render(into: buffer, frameCount: frameCount)
+        effects.process(into: buffer, frameCount: frameCount)
     }
 }
