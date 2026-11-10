@@ -78,6 +78,15 @@ final class MIDIInputService {
         onSourcesChanged?([])
     }
 
+    /// Re-enumerates the current sources and republishes the verdict.
+    ///
+    /// The notify block calls the same pass when a source appears or disappears.
+    /// This entry point exists for the connect probe, which publishes a virtual
+    /// source and then wants one more look rather than a second client.
+    func refresh() {
+        refreshSources()
+    }
+
     /// The notify block lands here, and so does anything else that wants the
     /// current list. It is a thin pass over the tracker's rules.
     private func refreshSources() {
