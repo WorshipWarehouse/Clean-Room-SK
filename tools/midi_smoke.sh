@@ -146,12 +146,15 @@ printf '::notice::MIDI connect probe: virtual source created, engine enumerated 
 # 3. The receive path. The connect has to be proven before any of this means
 #    anything, so the same exit status is read here rather than a second run.
 #
-# Every line the receive probe printed is published before anything is asserted,
-# so a step that fails still carries what the app actually saw:
+# Every message line the receive probe printed is published before anything is asserted, so
+# a step that fails still carries what the app actually saw. GitHub attaches at most ten
+# annotations to a step and the three per-send "send status 0" lines spent three of them,
+# pushing the layer-routing line and the closing verdict out; those status lines are dropped
+# here so the message lines fit under the cap:
 while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   printf '::notice::%s\n' "$line"
-done < <(sed -n 's/^SundayKeysApp: \(MIDI receive probe: .*\)$/\1/p' "$log" | sed 's/ pid=[0-9][0-9]*$//')
+done < <(sed -n 's/^SundayKeysApp: \(MIDI receive probe: .*\)$/\1/p' "$log" | sed 's/ pid=[0-9][0-9]*$//' | grep -v 'send status')
 
 [[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"
 
