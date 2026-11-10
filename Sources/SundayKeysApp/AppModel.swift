@@ -60,17 +60,17 @@ final class AppModel: ObservableObject {
     /// The arpeggiator's state and rules, behind the one panel the window binds
     /// to. Its notes leave through the same engine the keys do, so a stepped
     /// pattern would reach the voices a hand-played note reaches.
-    private let arpeggiator: ArpeggiatorPanel
+    ///
+    /// Lazy because the panel needs the engine as its note target, and a stored
+    /// property initialiser cannot read another one. Every control the player
+    /// touches goes through it, so the window and the service hold one value.
+    private lazy var arpeggiator = ArpeggiatorPanel(
+        clock: SystemHostClock(),
+        target: audio
+    )
     private var meter: Timer?
 
     init() {
-        // Built before the bank is read, because the panel owns its own service
-        // and nothing in it depends on a patch. Every later change goes through
-        // it, so the window and the service hold one value.
-        arpeggiator = ArpeggiatorPanel(
-            clock: SystemHostClock(),
-            target: audio
-        )
         loadBank()
         publishArpeggiator()
     }
@@ -415,8 +415,8 @@ final class AppModel: ObservableObject {
     }
 
     /// Copies the panel's state into the published mirrors. It reads the service
-    /// through the panel rather than reconstructing the words here, so the status
-    /// line the window shows is the panel's own.
+    /// through the panel rather than rebuilding the words here, so the status line
+    /// the window shows is the panel's own.
     private func publishArpeggiator() {
         arpeggiatorEnabled = arpeggiator.isEnabled
         arpeggiatorLatched = arpeggiator.isLatched
