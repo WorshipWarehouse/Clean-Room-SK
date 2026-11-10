@@ -31,7 +31,7 @@ final class MIDIEventRoutingTests: XCTestCase {
             .noteOff(note: 60, velocity: 64, channel: 0),
             .controlChange(controller: 1, value: 64, channel: 0),
             .programChange(program: 3, channel: 0),
-            .pitchBend(value: 0 | (64 << 7), channel: 0),
+            .pitchBend(value: UInt16(0 | (64 << 7)), channel: 0),
             .channelPressure(pressure: 40, channel: 0),
         ])
         XCTAssertEqual(router.delivered, 6)
@@ -251,7 +251,10 @@ final class MIDIEventRoutingTests: XCTestCase {
         router.route([0x90, 64, 96, 0x80, 64, 0, 0xB0, 1, 64], to: transport)
 
         XCTAssertEqual(keys.notes, ["on 64 96", "off 64"])
-        XCTAssertEqual(keys.others, [.controlChange(controller: 1, value: 64, channel: 0)])
+        XCTAssertEqual(
+            transport.others,
+            [.controlChange(controller: 1, value: 64, channel: 0)]
+        )
         XCTAssertEqual(router.delivered, 3)
     }
 }
