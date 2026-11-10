@@ -17,5 +17,14 @@ let package = Package(
         .target(name: "SundayKeysCore", dependencies: ["CSync"]),
         .executableTarget(name: "SundayKeysApp", dependencies: ["SundayKeysCore"]),
         .testTarget(name: "SundayKeysCoreTests", dependencies: ["SundayKeysCore"]),
+        // The licence gate is enforced in `AudioEngineController.noteOn`, which lives in the
+        // executable target. Nothing in the core can prove that call refuses, so this target
+        // depends on the executable - which SwiftPM supports - and drives the controller over a
+        // recorder instead of an audio device. It stays a separate target from the core tests so
+        // a failure says which layer broke.
+        .testTarget(
+            name: "SundayKeysAppTests",
+            dependencies: ["SundayKeysApp", "SundayKeysCore"]
+        ),
     ]
 )
