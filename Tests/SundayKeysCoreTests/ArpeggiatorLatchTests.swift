@@ -31,6 +31,10 @@ private final class SilentTarget: KeysoundNoteTarget {
 /// this repository's own and replaceable: a released key stays in the pattern,
 /// the pattern keeps running with no key down, and the first press made with
 /// nothing physically held starts a new chord.
+///
+/// Every instant below is on the default grid: 120 bpm, `.eighth` division, so
+/// a step every 0.25 s, and the default gate half of a step, so a note off
+/// 0.125 s after its note on.
 final class ArpeggiatorLatchTests: XCTestCase {
     private func makeService(
         enabled: Bool = true,
@@ -48,6 +52,11 @@ final class ArpeggiatorLatchTests: XCTestCase {
         return (clock, sink, service)
     }
 
+    func testLatchStartsOff() {
+        let (_, _, service) = makeService(enabled: true)
+        XCTAssertFalse(service.isLatched)
+    }
+
     func testALatchedPatternKeepsRunningAfterTheLastKeyComesUp() {
         let (clock, sink, service) = makeService(latched: true)
         service.keyDown(note: 60, velocity: 100, at: 0)
@@ -56,15 +65,17 @@ final class ArpeggiatorLatchTests: XCTestCase {
         service.tick()
         service.keyUp(note: 60, at: 0.05)
 
-        clock.now = 0.25
+        clock.now = 0.75
         service.tick()
 
         XCTAssertEqual(sink.lines, [
             "0.0 on 60 v100",
-            "0.0625 off 60",
-            "0.125 on 60 v100",
-            "0.1875 off 60",
+            "0.125 off 60",
             "0.25 on 60 v100",
+            "0.375 off 60",
+            "0.5 on 60 v100",
+            "0.625 off 60",
+            "0.75 on 60 v100",
         ])
         XCTAssertTrue(service.isStepping)
         XCTAssertEqual(service.heldNotes, [60])
@@ -91,10 +102,9 @@ final class ArpeggiatorLatchTests: XCTestCase {
 
         XCTAssertEqual(sink.lines, [
             "0.0 on 60 v100",
-            "0.0625 off 60",
+            "0.2 off 60",
             "0.2 on 67 v100",
-            "0.2625 off 67",
-            "0.325 on 67 v100",
+            "0.325 off 67",
         ])
         XCTAssertEqual(service.heldNotes, [67])
     }
@@ -136,9 +146,7 @@ final class ArpeggiatorLatchTests: XCTestCase {
 
         XCTAssertEqual(sink.lines, [
             "0.0 on 60 v100",
-            "0.0625 off 60",
-            "0.125 on 60 v100",
-            "0.1875 off 60",
+            "0.125 off 60",
             "0.25 on 60 v100",
         ])
     }
@@ -167,13 +175,13 @@ final class ArpeggiatorLatchTests: XCTestCase {
         service.tick()
         service.keyDown(note: 64, velocity: 100, at: 0.1)
 
-        clock.now = 0.25
+        clock.now = 0.5
         service.tick()
 
         XCTAssertEqual(sink.noteOns, [
             "0.0 on 60 v100",
-            "0.125 on 64 v100",
-            "0.25 on 60 v100",
+            "0.25 on 64 v100",
+            "0.5 on 60 v100",
         ])
         XCTAssertEqual(service.heldNotes, [60, 64])
     }
@@ -192,15 +200,17 @@ final class ArpeggiatorLatchTests: XCTestCase {
         service.tick()
         service.keyUp(note: 60, at: 1.05)
 
-        clock.now = 1.125
+        clock.now = 1.5
         service.tick()
 
         XCTAssertEqual(sink.lines, [
             "0.0 on 60 v120",
             "1.0 off 60",
             "1.0 on 60 v100",
-            "1.0625 off 60",
-            "1.125 on 60 v100",
+            "1.125 off 60",
+            "1.25 on 60 v100",
+            "1.375 off 60",
+            "1.5 on 60 v100",
         ])
         XCTAssertEqual(service.heldNotes, [60])
         XCTAssertTrue(service.isStepping)
