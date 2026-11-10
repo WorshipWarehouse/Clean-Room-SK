@@ -131,8 +131,8 @@ final class LicenceEnforcementTests: XCTestCase {
 
     /// A stepped pattern plays into the controller through `KeysoundNoteTarget`, which is the same
     /// `noteOn` the keys reach. With an expired standing the pattern still runs - the panel is
-    /// stepping, and it asked for notes - but none of them reaches the voices, and the controller
-    /// counted each refusal.
+    /// stepping, and it asked for notes - but none of them starts a voice, and the controller
+    /// counted the refusals.
     func testAnArpeggiatorStepIsRefusedByTheSameGate() async {
         let voices = RecordingVoicing()
         let controller = AudioEngineController(voice: voices)
@@ -150,7 +150,14 @@ final class LicenceEnforcementTests: XCTestCase {
 
         XCTAssertTrue(panel.isStepping, "the pattern ran, so a step was actually attempted")
         XCTAssertEqual(panel.heldNotes, [60])
-        XCTAssertEqual(voices.lines, [], "no step may reach the voices while the standing is refused")
+        // The panel's releases still reach the voices: the guard sits on `noteOn`, and a refusal
+        // that also swallowed `noteOff` could strand a voice that was already sounding when the
+        // standing changed. So the case asserts that no voice is started, not that the recorder
+        // is silent - the first run of this file is what showed the difference.
+        XCTAssertTrue(
+            voices.lines.allSatisfy { !$0.hasPrefix("on ") },
+            "no refused step may start a voice, got \(voices.lines)"
+        )
         XCTAssertGreaterThan(
             controller.refusedNotes,
             0,
