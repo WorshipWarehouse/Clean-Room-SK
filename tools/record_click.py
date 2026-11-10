@@ -5,10 +5,12 @@ success, and patches docs/progress.md, README.md, AppModel.swift and
 ContentView.swift with anchored insertions. tools/commit_record.py then commits
 the result and deletes both scripts plus .github/workflows/record_click.yml.
 
-AppModel.swift and ContentView.swift are far too large to replace through one API
-call without risking a transcription error, so every patch is anchored and
-asserted: an anchor that does not resolve exactly once fails the run instead of
-committing a guess.
+Every anchor was read from the tree at f6d2539 before it was written here, and
+each one must resolve exactly once: a moved anchor fails the run instead of
+committing a guess. The first attempt at this job died on
+'engineStatusLine = "Engine stopped"', which appears twice in AppModel.swift (the
+stored property and the assignment in stop()), so the stop reset is anchored on
+midiStatusBoard.reset() instead.
 """
 
 import json
@@ -27,6 +29,7 @@ CLICK_ID = (os.environ.get("CLICK_RUN_ID") or "42824933210").strip()
 def stop(message):
     print("recorder: " + message)
     print("::error title=recorder::" + " ".join(message.split()))
+    sys.stdout.flush()
     sys.exit(1)
 
 
@@ -90,6 +93,7 @@ def insert_after(text, needle, block, label):
     lines = text.split("\n")
     index = anchor(lines, needle, label)
     lines[index + 1:index + 1] = block_lines(block, pad_of(lines[index]))
+    print("recorder: %s at line %d" % (label, index + 1))
     return "\n".join(lines)
 
 
@@ -97,6 +101,7 @@ def insert_before(text, needle, block, label):
     lines = text.split("\n")
     index = anchor(lines, needle, label)
     lines[index:index] = block_lines(block, pad_of(lines[index]))
+    print("recorder: %s at line %d" % (label, index + 1))
     return "\n".join(lines)
 
 
@@ -276,7 +281,9 @@ func setClick(enabled: Bool? = nil, beatsPerMinute: Double? = nil, beatsPerBar: 
 
 """
 
-appmodel_start = """// A click switched on before Start is already what the graph should play.
+appmodel_start = """// A click switched on before Start is already what the graph plays, because the
+// controller keeps the settings across a stop; publishing again here keeps the
+// window and the graph in step on every start.
 audio.setMetronome(click)"""
 
 appmodel_meter = "self.clickCount = self.audio.clickCount"
@@ -305,7 +312,7 @@ struct ClickSection: View {
                     get: { model.click.beatsPerMinute },
                     set: { model.setClick(beatsPerMinute: $0) }
                 ),
-                in: 20...300,
+                in: MetronomeRanges.beatsPerMinute,
                 step: 1
             ) {
                 Text("\\(Int(model.click.beatsPerMinute)) bpm")
@@ -317,7 +324,7 @@ struct ClickSection: View {
                     get: { model.click.beatsPerBar },
                     set: { model.setClick(beatsPerBar: $0) }
                 ),
-                in: 1...16
+                in: MetronomeRanges.beatsPerBar
             ) {
                 Text("\\(model.click.beatsPerBar)/4")
                     .monospacedDigit()
@@ -350,8 +357,8 @@ model = read("Sources/SundayKeysApp/AppModel.swift")
 model = insert_after(model, "heldNotes: Set<UInt8> = []", appmodel_properties, "appmodel properties")
 model = insert_before(model, "MARK: - Patches", appmodel_methods, "appmodel methods")
 model = insert_after(model, "applyMIDIVerdict(midi.start())", appmodel_start, "appmodel start")
-model = insert_after(model, "voiceCount = self.audio.activeVoices", appmodel_meter, "appmodel meter")
-model = insert_before(model, "engineStatusLine = \"Engine stopped\"", appmodel_stop, "appmodel stop")
+model = insert_after(model, "self.voiceCount = self.audio.activeVoices", appmodel_meter, "appmodel meter")
+model = insert_after(model, "midiStatusBoard.reset()", appmodel_stop, "appmodel stop")
 write("Sources/SundayKeysApp/AppModel.swift", model)
 
 view = read("Sources/SundayKeysApp/ContentView.swift")
