@@ -18,14 +18,15 @@ this file tracks state.
 | Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
 | Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4, run `42729742825` |
 | Build, bundle | `SundayKeys.app` assembled from the release build, ad-hoc signed, plist and signature verified | `tools/bundle_app.sh`, run `42730684997` |
-| Launch, CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, and sees the app exit 0 through `NSApplication.terminate` | `tools/launch_smoke.sh`, `Sources/SundayKeysApp/LaunchProbe.swift`, run `42731763842` |
-| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching | `Tests/SundayKeysCoreTests/` |
+| Launch, CI | the runner starts the bundle, reaches its run loop and exits 0 | `tools/launch_smoke.sh`, run `42731763842` |
+| Build, audio start | the graph starts on the runner's output device, renders a voice and stops; a missing device is a typed error instead of a crash | `AudioStartPlan.swift`, `AudioEngineController.start()`, `tools/audio_smoke.sh`, run `42733100695` |
+| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
-controller layout, a playable set list and a bundle that CI assembles, verifies and now launches, not
-a finished product. What is still missing is everything that needs eyes and ears: no person has seen
-the window, no output device has been driven, no controller has been plugged in and nothing has been
-listened to, because the Mac that would do it is unreachable.
+controller layout, a playable set list, a bundle that CI assembles, verifies and launches, and an audio
+graph that CI starts and renders through. What is still missing is everything that needs eyes and ears:
+no person has seen the window, nothing has been listened to, and no controller has been plugged in,
+because the Mac that would do it is unreachable.
 
 ## Audio milestone: what the instrument actually is
 
@@ -304,6 +305,56 @@ startup defect surfaced: the attempt found no crash on init, no force-unwrap fai
 resource and no audio or MIDI abort with no controller and no device started, so nothing needed
 repair for this milestone.
 
+## Audio start milestone: the graph starts and renders
+
+The launch check ended where playback starts: nobody had ever pressed Start, so whether `AVAudioEngine`
+could open an output device, build the graph and run the render block was unknown. That was next
+action 2, and it is now done.
+
+- **The start path had a real hazard.** `AudioEngineController.start()` read
+  `engine.outputNode.inputFormat(forBus: 0)` before knowing a device existed. On a Mac with no output
+  device that raises an Objective-C exception, which Swift cannot catch, so pressing Start would have
+  taken the process down instead of reporting anything. `DefaultOutputDevice.exists()` now asks
+  CoreAudio for `kAudioHardwarePropertyDefaultOutputDevice` first, and a missing device becomes an
+  error the app can show.
+- **The decision is in the core module and is tested.** `AudioStartPlanner.plan(forReportedSampleRate:)`
+  turns what the device reported into a plan or a refusal: no device is
+  `AudioStartFailure.noOutputDevice`; a rate of zero, which is what macOS reports before the engine
+  runs, falls back to 48 kHz rather than failing; a negative or non-finite rate is
+  `unsupportedFormat`; anything else is kept as reported. The plan is always stereo, because the
+  render block computes one buffer and copies it to the remaining channels.
+- **Equality had to be written out.** `AudioStartFailure` carries a `Double` that can be NaN, and NaN
+  is never equal to itself, so synthesised equality made a rejected NaN rate impossible to compare at
+  all. Two rejections are equal when their rates have the same bit pattern, and a test pins that rule.
+- **The probe presses Start itself.** `SUNDAYKEYS_PROBE_START_ENGINE=1` starts the same
+  `AudioEngineController.start()` the button runs, plays note 69, waits half a second, reports
+  `engine started at N Hz` and the voice count the render block actually produced, stops the graph and
+  exits. A voice only exists once the audio callback has drained the command ring, so a non-zero count
+  is evidence the render thread ran, not just that the engine opened.
+- **Its exit status is the verdict.** 0 means started and rendered, 4 means the start was refused,
+  5 means it started but produced no voice, 6 means the probe lost the graph it created. `tools/audio_smoke.sh`
+  reads those and the markers.
+- **A machine with no output device is reported, not hidden.** If the app prints the typed
+  `No audio output device is available` failure and exits 4, the script publishes a warning annotation
+  with that line and still exits 0, because refusing cleanly is the correct behaviour there and the
+  run should say what the hardware was. Any other failure — a crash, a hang, an engine that refuses to
+  start for another reason, or a start with no voice — fails the step with the app's own output.
+- **Observed.** Run [`42733100695`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733100695)
+  on `e6ae994`: the macos job succeeded and its step 13, "Probe the audio start", passed in three
+  seconds (01:05:51 to 01:05:54). Debug build with tests, warnings, all suites, the release build, the
+  bundle step, the launch step, the audio step and the bootstrap smoke step all passed on that run.
+  The job published no warning annotation, and the no-device path always publishes one, so the graph
+  started and rendered at least one voice on the runner's default output device. The rate and voice
+  count the probe printed are not quoted here: the job log download truncates before the later steps,
+  so those lines were not read, and the pass is reported from the step's status and the script's exit
+  conditions.
+
+The first attempt at this milestone was run `42732896895` on `de6a1b6`, and it failed for two reasons
+of my own making, both fixed rather than tested around: `AudioStartPlanTests` could not compare a
+rejection carrying a NaN rate, and the launch probe captured the audio graph in a `@Sendable` timer
+closure, which the compiler reported as a warning. The comparison is now on bit patterns and the timer
+reaches the graph through a main-actor reference; both are in `e6ae994`.
+
 ## Remote development: what CI actually does
 
 The local Mac has been unreachable for this whole stretch of work, so every result in this log comes
@@ -324,17 +375,20 @@ group that supersedes an older run, and a 25-minute timeout. Its steps are:
    the executable and the signature, then the workflow repeats those checks and lists the files;
 8. `tools/launch_smoke.sh`, which starts the bundle, asserts the two startup markers and the probe
    timer and requires a status 0 exit, so a crash, a hang or a signal is a red step;
-9. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
-   present) or 1 (tools missing) or if it fails to report the toolchain, which is the smoke test for
-   the script's reporting and exit codes.
+9. `tools/audio_smoke.sh`, which starts the audio graph from inside the app, requires a rendered voice
+   and a clean exit, and reports a machine with no output device as a limitation with the app's own
+   line rather than as a pass;
+10. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
+    present) or 1 (tools missing) or if it fails to report the toolchain, which is the smoke test for
+    the script's reporting and exit codes.
 
 What that does not cover, and this log will not pretend otherwise: the install path of
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
-machine), notarisation and distribution signing, seeing the window, `AVAudioEngine` against a real
-output device, CoreMIDI against a real controller, and anything that needs to be heard. The DSP is
-validated by offline tests that measure sample values, and neither the set list panel nor the launched
-window has ever been looked at on a screen: nobody has listened to this or clicked through it on this
-hardware.
+machine), notarisation and distribution signing, seeing the window, listening to an output device,
+CoreMIDI against a real controller, and anything that needs to be heard. The DSP is validated by
+offline tests that measure sample values; the audio graph is validated by starting it and counting a
+rendered voice, which says the callback ran but says nothing about how it sounded. Nobody has
+listened to this or clicked through it on this hardware.
 
 ## Decompilation: awaiting external access
 
@@ -349,13 +403,13 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, start the
-   engine against a real output device, plug in a controller, click through the patch, set list,
-   effects and mapping panels, and listen to the effects chain. This is the only step that needs the
-   App Store Xcode and a person listening.
-2. A launch check for the audio path: with an environment variable, press Start from the probe, report
-   the sample rate the engine came up at or the error it threw, and exit. That would turn "no output
-   device" from a silent status message into an observed result on a runner.
+1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, press
+   Start against a real output device, plug in a controller, click through the patch, set list,
+   effects and mapping panels, and listen to the effects chain. This is the only step that needs a
+   person listening.
+2. A MIDI start probe, the same shape as the audio one: create the `MIDIClientRef`, enumerate sources,
+   report the count, and exit — so a runner with no controller proves the client is created and the
+   source list is empty rather than the app merely not crashing.
 3. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
    behaviour of a controller that sends on several channels.
 4. Session scope beyond one ordered list, once there is evidence for it: the original app's session
@@ -395,6 +449,10 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `a1a5e61` | [42730136694](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730136694) | success: the set list write-up, with no code change; build, tests, release build and the bootstrap smoke step. |
 | `3e0c3a9` | [42730684997](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) | success: build, all suites, the release build, the bundle step and the bootstrap smoke step. The bundle step ran the script and passed its plist, executable and strict signature checks. |
 | `7cb9a17` | [42731763842](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731763842) | success: build, all suites, warnings, release build, bundle step, the new launch step and the bootstrap smoke step. The launch step passed in seven seconds, which by the script's own exit conditions means both startup markers were found, the probe timer fired and the app exited 0. Annotations: the macOS capacity notice and the SwiftPM manifest warning. |
+| `98e5a41` | [42731121652](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731121652) | success: the README rows for the bundle, with the launch step not yet present. |
+| `dd24771` | [42732331904](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42732331904) | success: build, all suites, warnings, release build, bundle, launch step and bootstrap. The launch step passed in seven seconds (00:59:38 to 00:59:45); the only annotations were the capacity notice and the SwiftPM manifest warning. |
+| `de6a1b6` | [42732896895](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42732896895) | failure, one test, before any later step: `testAnImpossibleRateIsRejected` compared a failure carrying a NaN rate with `==`, and NaN is never equal to itself, so the case could not be asserted; the build also warned that the probe captured the audio graph in a `@Sendable` closure. Both were mine and both are fixed in `e6ae994`. |
+| `e6ae994` | [42733100695](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733100695) | success: build, all suites including `AudioStartPlanTests`, warnings, release build, bundle, launch step 12 (01:05:43 to 01:05:51), audio step 13 (01:05:51 to 01:05:54) and bootstrap. No warning annotation, so the no-device branch did not run and the graph started and rendered. |
 
 ## Coverage that remains
 
@@ -408,9 +466,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the original app's MIDI CC assignments | not decompiled | awaiting external access; this implementation's default layout is its own design and can be relearned |
 | the original app's session and set-list contents | not decompiled and not captured | a capture or a decompiled session type; the type here reproduces the behaviour, not the file layout |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
-| seeing the window, hearing an output device, using a real controller | need the unreachable Mac | next action 1 |
-| the audio graph and the MIDI client starting | only happen when the player presses Start, and no launch check presses it | next action 2, on a runner, or next action 1 on the Mac |
-| whether the LaunchServices double-click path quits gracefully | `open` cannot carry the probe and the check quits it by signal | next action 1, where a person quits the app |
+| whether audio sounds right | a rendered voice count says the callback ran, not that the output is musical | next action 1, with a person listening |
+| seeing the window, using a real controller | need the unreachable Mac | next action 1 |
+| the MIDI client being created and the source list being enumerated | no probe yet, and no controller on the runner | next action 2 |
 
 ## Decisions recorded
 
@@ -454,6 +512,12 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | a launch that cannot happen fails the step instead of warning | an unproven launch must not look green; the script prints the session it found and the app's own output so a red step names the obstacle |
 | LaunchServices is evidence, not the pass condition | `open` cannot carry the probe environment or be captured, and it can only be stopped by signal, so a clean exit could not be shown there |
 | liveness is read from the process state, not `kill -0` | an exited child answers `kill -0` until it is reaped, so a finished app would be misreported as a hang |
+| the output device is checked before the hardware format is read | reading `outputNode` with no device raises an exception Swift cannot catch, so the device check has to come first |
+| the start decision lives in the core module | the rule is what needs asserting, and AVFoundation in the app target cannot be exercised by `swift test` on a machine with no device |
+| a zero sample rate falls back to 48 kHz | macOS reports zero before the engine runs, and refusing there would make the instrument unusable on hardware that works |
+| rejected rates compare by bit pattern | a NaN rate breaks synthesised equality, so the case could not be compared or asserted at all |
+| the audio probe exits with its own status | 4 for a refused start, 5 for a start that rendered nothing and 6 for a lost graph let the script tell a clean refusal apart from a silent failure |
+| a missing output device is a warning, not a red build | refusing cleanly is correct on a machine with no device, and the run should record the hardware it had rather than pretend either way |
 
 ## Commit trail
 
@@ -496,5 +560,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `27b1999` | the bundle milestone in this log and the README; superseded by the next push before its run reported |
 | `98e5a41` | README rows for the bundle; verified by run `42731121652` |
 | `7cb9a17` | `LaunchProbe`, `tools/launch_smoke.sh` and the CI launch step; verified by run `42731763842` |
+| `d464492` | the launch milestone write-up; verified by run `42732331904` |
+| `dd24771` | README launch rows and the local run instructions; verified by run `42732331904` |
+| `de6a1b6` | `AudioStartPlan`, the device check, `tools/audio_smoke.sh` and the CI audio step; failed run `42732896895` |
+| `e6ae994` | bit-pattern equality for rejected rates and the graph out of the sendable timer; verified by run `42733100695` |
 
 Earlier analysis commits are listed in the analysis document itself.
