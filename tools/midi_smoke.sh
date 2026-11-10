@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # MIDI probes: does the app create a CoreMIDI client and input port on this
-# machine, what sources does it see, and does its connect path run against one?
+# machine, what sources does it see, does its connect path run against one, and
+# does a packet sent from that source come back through its own input port?
 #
 # Usage:
 #   tools/midi_smoke.sh                use build/SundayKeys.app, bundling it if absent
@@ -11,17 +12,18 @@
 #   1. the start probe reports what this machine has. A runner with no controller
 #      has no sources, and that is published as a warning with the app's own line
 #      rather than counted as a pass or a failure.
-#   2. the connect probe publishes a virtual source from inside the app and then
-#      runs the same start the button runs, so the engine's own enumeration finds
-#      a source and its connect path runs with no hardware present. The step fails
-#      unless the app reports the source created, the engine enumerating it, the
-#      port connecting it, and a status line that says a source is connected.
+#   2. the connect probe publishes a virtual source from inside the app and runs
+#      the same start the button runs, so the engine's own enumeration finds a
+#      source and its connect path runs with no hardware present. It then emits a
+#      note on, a note off and a control change from that source and reports what
+#      the app's own input block parsed out of them, plus what layer routing did
+#      with the note. Nothing is sent unless the connect proved itself first.
 #
-# The app's exit status is its verdict: 0 the client and port were created and
-# every online source connected, 4 no client, 5 no port, 6 a source the port
-# refused. The connect probe adds 7 the system would not publish a source, 8 the
-# engine never listed it and 9 it was listed but never attempted; all three fail
-# this step, because the connect itself is what that probe is for.
+# The app's exit status is its verdict: 0 every packet parsed, 4 no client, 5 no
+# port, 6 a source the port refused, 7 the system would not publish a source, 8
+# the engine never listed it, 9 it was listed but never attempted, 10 no note off,
+# 11 no control change, 12 nothing received, 13 no note on. Each of those fails
+# this step, because the connect and the receive are what these probes are for.
 
 set -euo pipefail
 
@@ -31,7 +33,7 @@ app=build/SundayKeys.app
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --app) app="${2:?--app needs a path}"; shift 2 ;;
-    -h|--help) sed -n '2,24p' "${BASH_SOURCE[0]}"; exit 0 ;;
+    -h|--help) sed -n '2,30p' "${BASH_SOURCE[0]}"; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
@@ -115,7 +117,8 @@ else
   printf 'PASS  the start probe enumerated %s source(s) and connected them\n\n' "$sources"
 fi
 
-# 2. The connect path, against a source the probe publishes itself.
+# 2. The connect path, against a source the probe publishes itself, and then the
+#    receive path, through that same source.
 connect_status=0
 run_probe "MIDI connect probe" SUNDAYKEYS_PROBE_MIDI_CONNECT "$logdir/connect.log" || connect_status=$?
 
@@ -130,13 +133,47 @@ connected="$(grep -oE 'SundayKeysApp: MIDI probe: connected [0-9]+ of' "$log" | 
 [[ -n "$connected" ]] || fail "the connect probe did not report how many sources the port connected"
 [[ "$connected" -ge 1 ]] || fail "the engine enumerated $enumerated source(s) but the port connected none of them"
 
-# The marker stream appends ` pid=<n>` to every line, so the status is stripped
-# of it before it is compared, printed and published.
+# The marker stream appends ` pid=<n>` to every line, so each line is stripped of
+# it before it is compared, printed and published.
 midi_status="$(sed -n 's/^SundayKeysApp: MIDI probe: status: //p' "$log" | sed 's/ pid=[0-9][0-9]*$//' | head -n 1)"
 [[ -n "$midi_status" ]] || fail "the connect probe did not report a MIDI status"
 [[ "$midi_status" =~ ^MIDI\ ready,\ [1-9][0-9]*\ of\ [1-9][0-9]*\ source\(s\)\ connected$ ]] \
   || fail "the MIDI status does not report a connected source: $midi_status"
-[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"
 
 printf 'PASS  a virtual source was created, the engine enumerated %s source(s), the port connected %s, status: %s\n' "$enumerated" "$connected" "$midi_status"
-printf '::notice::MIDI connect probe: virtual source created, engine enumerated %s source(s), connected %s, status: %s\n' "$enumerated" "$connected" "$midi_status"
+printf '::notice::MIDI connect probe: virtual source created, engine enumerated %s source(s), connected %s, status: %s\n\n' "$enumerated" "$connected" "$midi_status"
+
+# 3. The receive path. The connect has to be proven before any of this means
+#    anything, so the same exit status is read here rather than a second run.
+[[ "$connect_status" -eq 0 ]] || fail "the app reported a connected source but exited with $connect_status instead of 0"
+
+sent="$(grep -cE '^SundayKeysApp: MIDI receive probe: send status 0( pid=[0-9]+)?$' "$log" || true)"
+[[ "$sent" -eq 3 ]] || fail "the app did not report three successful sends from the virtual source (found $sent)"
+
+received="$(sed -n 's/^SundayKeysApp: MIDI receive probe: the app received //p' "$log" | sed 's/ pid=[0-9][0-9]*$//' | head -n 1)"
+[[ -n "$received" ]] || fail "the receive probe did not report what the app received"
+[[ "$received" =~ ^([0-9]+)\ message\(s\):\ ([0-9]+)\ note\ on,\ ([0-9]+)\ note\ off,\ ([0-9]+)\ control\ change$ ]] \
+  || fail "the receive summary is not in the expected form: $received"
+
+messages="${BASH_REMATCH[1]}"
+note_ons="${BASH_REMATCH[2]}"
+note_offs="${BASH_REMATCH[3]}"
+control_changes="${BASH_REMATCH[4]}"
+
+[[ "$note_ons" -ge 1 ]] || fail "the app parsed no note on from the virtual source: $received"
+[[ "$note_offs" -ge 1 ]] || fail "the app parsed no note off from the virtual source: $received"
+[[ "$control_changes" -ge 1 ]] || fail "the app parsed no control change from the virtual source: $received"
+
+routed="$(sed -n 's/^SundayKeysApp: MIDI receive probe: layer routing sent note [0-9][0-9]* to //p' "$log" | sed 's/ pid=[0-9][0-9]*$//' | head -n 1)"
+[[ -n "$routed" ]] || fail "the receive probe did not report what layer routing did with the received note"
+[[ "$routed" =~ ^([0-9]+)\ of\ ([0-9]+)\ enabled\ layer\(s\)$ ]] \
+  || fail "the routing line is not in the expected form: $routed"
+
+reached="${BASH_REMATCH[1]}"
+enabled="${BASH_REMATCH[2]}"
+[[ "$reached" -ge 1 ]] || fail "the received note was routed to no layer: $routed"
+
+printf 'PASS  the app received %s message(s) from its own virtual source: %s note on, %s note off, %s control change; layer routing reached %s of %s enabled layer(s)\n' \
+  "$messages" "$note_ons" "$note_offs" "$control_changes" "$reached" "$enabled"
+printf '::notice::MIDI receive probe: the app parsed %s note on, %s note off and %s control change sent from its own virtual source, and layer routing sent the note to %s of %s enabled layer(s)\n' \
+  "$note_ons" "$note_offs" "$control_changes" "$reached" "$enabled"

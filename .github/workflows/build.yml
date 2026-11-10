@@ -103,8 +103,11 @@ jobs:
           bash tools/audio_smoke.sh
 
       # Creates the CoreMIDI client and input port from inside the app and lists
-      # the sources it finds. A runner with no controller reports zero sources as
-      # a limitation with the app's own line, not as a pass.
+      # the sources it finds, which on a runner with no controller is none. It
+      # then publishes a virtual source of its own, proves the port connects it,
+      # and sends a note on, a note off and a control change through it, so the
+      # step also proves the app's own input block received and parsed real
+      # packets and that the note routed to a layer.
       - name: Probe the MIDI start
         if: success()
         run: |
