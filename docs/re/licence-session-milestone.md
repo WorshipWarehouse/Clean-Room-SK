@@ -368,6 +368,25 @@ runs for the same branch and ref began; the dispatched runs in the table above a
 A dispatch that lands `queued` with no runner was not needed this pass: every dispatched run was
 picked up within a minute.
 
+### The record head `68ad1fd`
+
+Record-only head `68ad1fd7d11cb03b49ecfb078e61cb5e73e690cd` (tree `057d6d24`) adds only this
+document. Its five workflows were dispatched on `main` at that commit and read to a terminal
+state:
+
+| workflow | run | job result | steps read (all `success`) |
+| --- | --- | --- | --- |
+| build | 42908971189 | `completed`, `success` 21:52:19 | toolchain, Resolve dependencies 21:51:07-10, Build (debug, with tests) 21:51:10-32, Test 21:51:32-35, Build (release) 21:51:35-55, Bundle 21:51:55-57, Launch 21:51:57-21:52:03, audio probe 21:52:03-06, MIDI probe 21:52:06-08, licence probe 21:52:08-12, bootstrap verification 21:52:12-14 |
+| click | 42908970488 | `completed`, `success` 21:51:48 | Build (release) 21:51:09-38, Bundle 21:51:38-40, click probe 21:51:40-44 |
+| patch-transfer | 42908970682 | `completed`, `success` 21:52:05 | Build (release) 21:51:21-57, Bundle 21:51:57-59, patch-transfer probe 21:51:59-21:52:01 |
+| session | 42908971037 | `completed`, `success` 21:51:53 | Build (release) 21:51:06-43, Bundle 21:51:43-45, session-resume probe 21:51:45-49 |
+| concurrency | 42908970806 | `completed`, `success` 21:51:50 | Build with complete concurrency checking 21:51:09-46, flag proof, diagnostics report, MIDI-seam gate 21:51:46-47 |
+
+A commit cannot name runs that postdate it, so any later record-only commit is verified the same
+way: five dispatches at that commit, each read to a terminal state before it is called green, and
+its run IDs reported in the session that made it rather than written into the commit before them.
+That is the only category of commit here that is not named by this document.
+
 ## Still not verified
 
 - **The real endpoint has never been contacted.** There are no credentials in this repository and
