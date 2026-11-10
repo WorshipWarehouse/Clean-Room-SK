@@ -73,30 +73,63 @@ already, and every later milestone depends on the gating it exposes.
 - `unknownPrefix` is the fixed phrase every no-verdict line starts with, so a reader cannot
   mistake a failed check for a verdict.
 
+`Sources/SundayKeysCore/Session/LicenceGate.swift` - the playback decision (this pass):
+
+- `LicenceGate` (`permitted` / `refused(line)`), built from a `SessionLaunch`, with
+  `permitsPlayback`, `refusalLine` and one `line` (`licensed playback permitted` or
+  `licensed playback refused: <launch line>`).
+- It adds no new rule: the permit/refuse mapping is `SessionLaunch.allowsPremiumSounds`, which is
+  rules 11 to 14 below. The type exists so the sounding path asks a decision rather than reading
+  a Boolean that another call site also wrote, and so a refusal is a value a test can assert.
+
 `Sources/SundayKeysApp/SessionTransport.swift` - the production side of the seam:
 
 - `URLSessionSessionTransport` is the only place in the app that touches `URLSession`.
 - `SessionConfiguration` builds a client only when `SUNDAYKEYS_SESSION_TOKEN` is set, with
   `SUNDAYKEYS_API_BASE` overriding the recorded production base for a local experiment.
 
-`Sources/SundayKeysApp/AppModel.swift` - the startup wiring:
+`Sources/SundayKeysApp/AppModel.swift` - the startup wiring, and the consumer this pass added:
 
 - `init(sessionClient:)` takes the seam and stores it. `nil` is a supported launch: it applies
   `.unknown(noClientReason)` so the window says the licence was not checked.
 - `checkSession(at:)` is the startup read: one await, one `SessionLaunch.resolve`, one `apply`.
-- `apply(_:)` is the only writer of `licenceStatus`, `launchAllowsPremiumSounds` and `launch`,
-  so the line and the permission always come from the same decision.
+- `apply(_:)` is the only writer of `licenceStatus`, `licenceGate` and `launch`, and it is also
+  the only place the audio controller is told what the launch decided (`audio.setLicenceGate`).
+  The line and the gate and the controller's copy all come from the same `SessionLaunch`.
+- `launchAllowsPremiumSounds` is no longer a stored flag: it is a computed read of
+  `licenceGate.permitsPlayback`, so there is one authority instead of two values to keep in step.
+- `keyDown(_:velocity:)` and the `MIDIEventTransport.noteOn(note:velocity:channel:)` both consult
+  the gate before a note is sent and record `refused <note>: licensed playback refused: ...` in
+  `lastEvent`, so a refusal is readable in the window's event line and not only silence.
+- `start()` republishes the gate to the controller, because the graph is rebuilt on every start
+  and a launch refused before Start must still be refused after it.
 
-`Sources/SundayKeysApp/SundayKeysApp.swift` - the root view now builds the model with
+`Sources/SundayKeysApp/Audio/AudioEngineController.swift` - the one place a voice can start:
+
+- `noteOn(note:velocity:)` checks `licenceGate` before touching the engine and counts refused
+  requests in `refusedNotes`. The on-screen keys, the MIDI transport and the arpeggiator all
+  reach this call, so the stepped arpeggiator - which is built with `target: audio` and never
+  passes through `AppModel` - is covered by the same gate instead of a second check.
+- A gate change rebuilds nothing: like `setPatch`, it publishes and takes effect on the next
+  note, so a refusal never cuts a chord already sounding.
+- The default is `permitted`, so a launch that never asked keeps the licence the player holds.
+
+`Sources/SundayKeysApp/SundayKeysApp.swift` - the root view builds the model with
 `SessionConfiguration.client()` and calls `checkSession()` from `onAppear`, once per launch.
 
 `Sources/SundayKeysApp/LicenceProbe.swift` - the app-level proof below, run by
-`tools/licence_smoke.sh` and by the build workflow.
+`tools/licence_smoke.sh` and by the build workflow. This pass it reports, per mode, the launch
+line, the gate line, and the outcome of a real note request through the model's MIDI transport
+(`note on ...` or `refused note ...: <gate line>`), and exits 5 on a wrong line, 6 on a wrong gate
+or note outcome, 7 if it cannot build its model, 64 on a bad mode.
 
 `Tests/SundayKeysCoreTests/LicenceSessionTests.swift` - five test classes for the model.
 
 `Tests/SundayKeysCoreTests/SessionClientTests.swift` - the seam and the launch decision, over a
 stub transport.
+
+`Tests/SundayKeysCoreTests/LicenceGateTests.swift` - nine cases for the gate, each derived from
+payload bytes through the real `SessionClient` over a stub transport.
 
 ## Rules this implementation chooses (assumptions, replaceable)
 
@@ -134,6 +167,21 @@ Every one of these is this repository's own decision, not recovered behaviour:
 16. The sign-in flow is not reconstructed: the app participates in the seam only when a token is
     supplied in the environment. There is no login UI, no keychain item and no token refresh;
     a launch without a token is local-first and says so.
+
+Rules this pass adds, about where the decision is enforced rather than what it decides:
+
+17. The gate is consulted at `AudioEngineController.noteOn` as well as in the two `AppModel` note
+    entry points. The controller is the one place a voice can start, so the arpeggiator - which
+    holds the engine directly as its note target - cannot bypass the decision by construction.
+    The `AppModel` checks are what make the refusal visible (`lastEvent`); they are not the only
+    barrier.
+18. A refused note is dropped, not muted and not queued: `refusedNotes` counts it and the event
+    line names it. Nothing stops the engine, the click or patch switching, because section 4
+    documents a downgraded library rather than a lock-out (rule 13).
+19. The gate defaults to `permitted` in the controller and in `AppModel`, so a launch with no
+    verdict and any code path that has not yet applied one cannot withdraw a licence (rule 12).
+20. `launchAllowsPremiumSounds` remains only as a computed read of the gate. There is no stored
+    Boolean left to disagree with the decision.
 
 ## What the tests assert
 
@@ -174,11 +222,26 @@ The seam and the launch decision (`SessionClientTests.swift`), all over an actor
 - plain text and an `{error}` envelope on a 200 resolve to `.malformed` with the specific
   `SessionDecodingError`, never to a session.
 
+The playback gate (`LicenceGateTests.swift`), each case going through `SessionClient` over a stub
+transport and asserting `permitsPlayback`, `refusalLine` and `line`:
+
+- `active` -> `.permitted`, `licensed playback permitted`, no refusal line;
+- a `grace_period` ending in a day -> permitted;
+- a grace window whose end has passed -> refused, line `licensed playback refused: Session
+  refused: Grace period ended: sounds downgraded`;
+- `expired` -> refused with the expiry line;
+- no `license` member -> refused with the unlicensed line;
+- `{"status":"trialing"}` -> refused, quoting `trialing`;
+- a 401, a throwing transport, and a `.unknown` launch all -> permitted with no refusal line,
+  because unreachable is not evidence about a licence.
+
 The app's own startup path (`tools/licence_smoke.sh`, run by the build workflow): six launches of
-the bundle, each over a stub transport, asserting `AppModel.licenceStatus` and
-`AppModel.launchAllowsPremiumSounds` - the two values the window reads - for `active`, `grace`,
-`expired`, `absent`, `unreadable` and `failure`. This exists because the package has no test
-target that can import the executable target, so `AppModel` cannot be unit-tested directly.
+the bundle, each over a stub transport. The script now asserts the line the window shows
+(`launch:`), the gate the model applied (`gate:`), and the outcome of one note request through
+the model's MIDI transport (`note: note on` for a permitted launch, `note: refused note` for a
+refused one) for `active`, `grace`, `expired`, `absent`, `unreadable` and `failure`. This exists
+because the package has no test target that can import the executable target, so `AppModel`
+cannot be unit-tested directly.
 
 ## Verification - actual runs
 
@@ -202,7 +265,7 @@ First attempt at this milestone, commit `18d8669f` (build run `42901973653`, con
 `SessionScope` was not touched, so launch-restore behaviour is unchanged. The runs above are the
 ones that prove the renamed code.
 
-### This pass - the seam, the wiring and the six launch branches
+### The seam, the wiring and the six launch branches
 
 Code head `43c04a0615ee96f25995177b75ddcae23d97a985` (tree `70b9a6bf`), all five workflows
 push-triggered, `status: completed`, every step `success`:
@@ -241,7 +304,7 @@ Heads that failed on the way here, and what they showed:
   (`AppModel.swift`) and `b1287e45` (`tools/licence_smoke.sh`), and every later file in this pass
   was written one path per commit so the mapping cannot be guessed again.
 
-### Deltas this pass - transport and startup
+### Deltas - transport and startup
 
 - **Transport**: `SessionTransport` (async request -> bytes/status) and `SessionClient.fetch(at:)`
   in core, with no Foundation networking in the test path; `URLSessionSessionTransport` in the
@@ -254,6 +317,57 @@ Heads that failed on the way here, and what they showed:
 - **Decision**: a `grace_period` takes its permission from `LicenceStanding.access`, not from the
   status label - the one behaviour the failing run above corrected.
 
+### The docs head `c1f7032e` (read, then superseded)
+
+Docs-only head `c1f7032e59732903f79c268be0caca45e0f7d762` (tree `158b42d5`) was read to a terminal
+state before this pass began, so its result is a read result and not an inference:
+
+| workflow | run | result read |
+| --- | --- | --- |
+| build | 42906765519 | `completed`, `success`; 18/18 steps `success`: toolchain, Resolve dependencies, Build (debug, with tests) 21:37:29-21:38:03, Test, release build, bundle, launch, audio probe, MIDI probe, licence probe 21:38:50-21:38:54, bootstrap verification |
+| click | 42906434051 | `completed`, `success`; release build, bundle, click probe |
+| patch-transfer | 42906433936 | `completed`, `success`; release build, bundle, patch-transfer probe |
+| session | 42906433799 | `completed`, `success`; release build, bundle, session-resume probe |
+| concurrency | 42906765096 | `completed`, `success`; strict build, flag proof, diagnostics report, MIDI-seam gate |
+
+That head changes no code, so it proves the record, not the behaviour. This pass's code head below
+supersedes it for behaviour, and its own runs are the ones that carry the gate.
+
+### This pass - making the gate bind
+
+Code head `d52c1bdf8118e3e85c697ffa2ddf8dd2f4ac9666` (tree `053913fc`). The five workflows were
+dispatched on `main` at that commit and were read to a terminal state from the jobs API:
+
+| workflow | run | job result | steps read (all `success` unless noted) |
+| --- | --- | --- | --- |
+| build | 42908221576 | `completed`, `success` 21:47:34 | Set up job 21:46:24, checkout, toolchain 21:46:26-29, Resolve dependencies 21:46:29-32, Build (debug, with tests) 21:46:32-52, Report warnings, Test 21:46:52-55, Build (release) 21:46:55-21:47:13, Bundle 21:47:13-15, Launch 21:47:15-20, audio probe 21:47:20-23, MIDI probe 21:47:23-25, licence probe 21:47:25-30, bootstrap verification 21:47:30-32. `Report build diagnostics` and `Report test diagnostics` `skipped` by design |
+| click | 42908238146 | `completed`, `success` 21:47:23 | toolchain, Build (release) 21:46:34-21:47:12, Bundle 21:47:12-14, click probe 21:47:14-19 |
+| patch-transfer | 42908288543 | `completed`, `success` 21:47:50 | toolchain, Build (release) 21:47:08-42, Bundle 21:47:42-43, patch-transfer probe 21:47:43-45 |
+| session | 42908237915 | `completed`, `success` 21:47:40 | toolchain, Build (release) 21:47:05-33, Bundle 21:47:33-35, session-resume probe 21:47:35-37 |
+| concurrency | 42908256182 | `completed`, `success` 21:47:43 | toolchain, Build with complete concurrency checking 21:47:00-39, flag proof, diagnostics report, MIDI-seam gate |
+
+What those steps mean for this pass:
+
+- `Build (debug, with tests)` compiling on that head is the evidence that `LicenceGate`,
+  `AudioEngineController`'s guard and the `AppModel` rewiring compile together in the app target.
+- `Test` on that head ran the whole suite, including `LicenceGateTests`: nine cases that assert
+  `permitsPlayback`, `refusalLine` and `line` for a permitted launch, a closed grace window, an
+  expired licence, an absent licence, an unreadable status, a 401, a transport failure and a
+  launch with no verdict.
+- `Probe the licence session` ran `tools/licence_smoke.sh` on that head: six bundle launches over
+  stub transports, asserting the `launch:`, `gate:` and `note:` lines for all six modes. The step
+  exited 0, so each assertion in the script held.
+
+The commits on that head, in order, are `da99bcdb` (`LicenceGate`), `38dc3dd4` (the controller
+guard), `2a2532a3` (`AppModel` applies and consults the gate), `f0cf8a0b` (the probe), `1b629102`
+(the smoke script) and `d52c1bdf` (the gate tests).
+
+Three push-triggered runs for those same commits (`42908213313` concurrency, `42908213412`
+concurrency, `42908213532` click) were `cancelled` within seconds of starting, when the dispatch
+runs for the same branch and ref began; the dispatched runs in the table above are the ones read.
+A dispatch that lands `queued` with no runner was not needed this pass: every dispatched run was
+picked up within a minute.
+
 ## Still not verified
 
 - **The real endpoint has never been contacted.** There are no credentials in this repository and
@@ -265,14 +379,20 @@ Heads that failed on the way here, and what they showed:
   client does with `access_token_expired_error` is not recovered.
 - **No live round-trip, in either direction.** The probe's bodies are hand-written from the
   recorded field names; a real server may answer with a shape these readers refuse.
-- **No window has been seen with a licence verdict in it.** No view binds `licenceStatus` or
-  `launchAllowsPremiumSounds` yet: the request was to reuse existing state rather than build new
-  UI, and no existing control reads a licence, so the values are published and asserted but not
-  drawn. Nothing about premium sounds is gated by them either, for the same reason - there is no
-  existing premium-only surface to gate.
+- **No window has been seen with a licence verdict in it.** The gate is published and asserted,
+  and a refusal now shows up in `lastEvent`, but no view binds `licenceStatus` or `licenceGate`
+  and no window was opened in front of a person: the runs launch the bundle headlessly. Rules 11
+  to 20 are therefore proven as decisions and note outcomes, not as pixels.
+- **A refused note has never been heard or not heard.** No run starts an audio device, so the
+  controller's guard is proven by compilation plus the model-level note outcome in the probe; the
+  `refusedNotes` counter has no run that reads it.
+- **The arpeggiator is covered by construction, not by a run.** It holds `AudioEngineController`
+  as its note target, so its notes must pass the same guard, but no CI step turns the arpeggiator
+  on against a refused gate. That the guard sits on the one voice-starting call is read from the
+  code, not from a green test.
 - **The probe's own output was not read line by line.** The build job's log download returns a
   truncated head, so the `licence probe:` assertions are evidenced by the step's exit status and
-  by the script's own `set -e`, not by quoted output.
+  by the script's `set -o pipefail` and explicit `fail` calls, not by quoted output.
 - **Nothing hardware-dependent moved.** No audio device, MIDI hardware, signed bundle or
   notarised app was involved in this pass.
 
