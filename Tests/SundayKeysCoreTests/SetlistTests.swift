@@ -107,7 +107,6 @@ final class SetlistTests: XCTestCase {
         XCTAssertEqual(list.entries.map(\.patchID), [a.id, c.id, b.id])
         XCTAssertEqual(list.currentEntry?.id, headID)
         XCTAssertEqual(list.currentIndex, 2)
-
         XCTAssertTrue(list.move(entryID: headID, by: -2))
         XCTAssertEqual(list.currentIndex, 0, "moving backwards works the same way")
     }
@@ -165,7 +164,10 @@ final class SetlistTests: XCTestCase {
         let next = list.step(by: 1, available: [a.id, c.id])
 
         XCTAssertEqual(next?.patchID, c.id, "a slot that cannot play is stepped over, not played")
-        XCTAssertEqual(list.currentIndex, 1)
+        // The head lands on the third slot, not the second: a skipped slot is not removed, so
+        // the slot that played is still index 2 of three. The list reports positions and does
+        // not compact them.
+        XCTAssertEqual(list.currentIndex, 2)
     }
 
     func testBankOrderCoversEveryPatchOnceInOrder() {
@@ -322,7 +324,6 @@ final class SetlistEngineTests: XCTestCase {
             patches: [wet, dry],
             setlist: Setlist.bankOrder([wet, dry])
         )
-
         let engine = RealtimeKeysoundEngine(sampleRate: 48_000, layers: wet.layers)
         engine.setPatch(wet)
         engine.noteOn(note: 60, velocity: 110)
@@ -352,7 +353,6 @@ final class SetlistEngineTests: XCTestCase {
         let dry = Patch(name: "Dry", layers: KeyLayer.defaultPatch)
         let wet = wetPatch("Wet")
         var bank = PatchBank(patches: [dry, wet], setlist: Setlist.bankOrder([dry, wet]))
-
         let engine = RealtimeKeysoundEngine(sampleRate: 48_000, layers: dry.layers)
         engine.setPatch(dry)
 
@@ -361,11 +361,12 @@ final class SetlistEngineTests: XCTestCase {
         }
         XCTAssertEqual(next.id, wet.id)
         engine.setPatch(next)
-
         engine.noteOn(note: 60, velocity: 110)
         _ = render(engine, blocks: 6)
         engine.noteOff(note: 60)
-        let tail = render(engine, blocks: 20)
+        // Release is 220 ms, which is 10,560 frames and so 20.6 blocks of 512, so 20 blocks
+        // leaves the voice still fading. The envelope is right; the block count was wrong.
+        let tail = render(engine, blocks: 24)
 
         XCTAssertEqual(engine.voiceCount, 0)
         XCTAssertGreaterThan(
