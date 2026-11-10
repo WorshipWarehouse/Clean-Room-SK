@@ -1,0 +1,106 @@
+name: record-arpeggiator
+
+# One shot. Appends the arpeggiator milestone to docs/progress.md with the windows read from
+# the completed run objects on 3098d9b6, then deletes itself. The commit it pushes changes
+# documentation plus the removal of this recorder, and carries no run of its own by design.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  record:
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Record the milestone
+        run: |
+          set +e
+          set -o pipefail
+          python3 - <<'PY' 2>&1 | tee /tmp/record.log
+          import pathlib, subprocess, sys
+
+          SECTION = """## Arpeggiator milestone: six styles, stepped and asserted
+
+The inventory names `ArpeggiatorStyleApi` with six styles and records their behaviour as
+**Unknown**. Ordering is the one part of stepped playback that needs no capture: it is a pure
+function of the held notes and the style, so it can be written from the recorded names and proved
+on a runner without hearing a note.
+
+- **`docs/re/arpeggiator.md`** states what is Observed (the six style names; `MidiEffectApi`'s
+  octaveUp, easyChord, arpeggiator, sequencer; `SyncOptionApi` subdivision and frequency) and what
+  stays **Unknown**: the step rate and whether it follows the patch tempo, the octave span, gate
+  length, swing, latch, what a single note does, and the values behind `SubdivisionApi`'s names.
+  None of it is guessed at.
+- **`Arpeggiator`** owns no clock and makes no sound: it answers which notes sound on the next
+  step, and a caller that owns a clock asks once per step. `up` and `down` walk the held notes and
+  wrap; `upDown` and `downUp` turn without repeating the note at either end; `random` draws one note
+  per step from a seeded SplitMix64 generator, so a run is reproducible; `chord` sounds every held
+  note ascending. Notes are deduplicated and ordered by pitch, an empty pattern returns nothing and
+  does not advance, and changing style restarts the pattern.
+- **`ArpeggiatorTests`** asserts exact step sequences, not that the path ran: five steps of `up` and
+  of `down`, six of each turning style, both two-note turns, `chord` ordering, an empty pattern
+  leaving the cursor at the first step, releasing the current note keeping the cursor inside the
+  shorter pattern, a repeated hold not lengthening the pattern, a fixed seed reproducing `random`
+  and reaching every held note, `random` never returning an unheld note, and every style being
+  covered.
+
+**Observed.** Run [42851404966](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42851404966)
+on `3098d9b6`: the build job concluded success with every step green. `Build (debug, with tests)`
+16:07:41 to 16:07:57 compiled `Arpeggiator.swift` and the new suite, `Test` 16:07:57 to 16:08:01
+ran every suite including the fifteen arpeggiator cases, `Build (release)` 16:08:01 to 16:08:16
+followed, `Bundle the app` 16:08:16 to 16:08:17, `Launch the app` 16:08:17 to 16:08:23, the audio
+probe 16:08:23 to 16:08:25, the MIDI probe 16:08:25 to 16:08:27 and the bootstrap check 16:08:27 to
+16:08:28; the job completed at 16:08:31. The same head's session workflow, run
+[42851404845](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42851404845), stayed
+green (release 16:07:46 to 16:08:16, probe 16:08:18 to 16:08:20), as did the click workflow, run
+[42851404693](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42851404693) (probe
+16:08:35 to 16:08:39), and the patch transfer workflow, run
+[42851404757](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42851404757) (probe
+16:08:37 to 16:08:39).
+
+**What this does not establish.** No note was heard: the tests prove ordering and state, and a runner
+cannot judge the sound of either. The step clock does not exist yet, so nothing here says how fast a
+pattern moves or whether it follows the tempo, and the original's own stepping stays **Unknown**
+until a capture. The six style names are the only thing this milestone took from the record; every
+rule in it is this repository's own and is replaceable.
+
+"""
+
+          doc = pathlib.Path("docs/progress.md")
+          text = doc.read_text()
+
+          if "Arpeggiator milestone" in text:
+              print("record: the milestone is already written")
+              sys.exit(0)
+
+          marker = "## Next actions, in order"
+          if text.count(marker) != 1:
+              print(f"record check: expected one next-actions heading, found {text.count(marker)}")
+              sys.exit(1)
+
+          doc.write_text(text.replace(marker, SECTION + marker, 1))
+          print("record: the milestone is in place")
+
+          subprocess.run(["git", "config", "user.name", "Sunday Keys CI"], check=True)
+          subprocess.run(["git", "config", "user.email", "actions@users.noreply.github.com"], check=True)
+          subprocess.run(["git", "add", "docs/progress.md"], check=True)
+          subprocess.run(
+              ["git", "commit", "-m", "Record the arpeggiator milestone and the runs that proved it"],
+              check=True,
+          )
+          subprocess.run(["git", "rm", "-q", ".github/workflows/record_arpeggiator.yml"], check=True)
+          subprocess.run(["git", "commit", "-m", "Remove the one-shot arpeggiator recorder"], check=True)
+          subprocess.run(["git", "push", "origin", "HEAD:main"], check=True)
+          print("record: pushed")
+          PY
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            tail -30 /tmp/record.log | tr -d '\r' | while IFS= read -r line; do
+              if [ -n "$line" ]; then echo "::error::${line}"; fi
+            done
+          fi
+          exit "$status"
