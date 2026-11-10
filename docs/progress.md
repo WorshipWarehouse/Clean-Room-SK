@@ -14,10 +14,14 @@ this file tracks state.
 | Build, shell | done | commit `43637aa` |
 | Build, instrument | polyphonic wavetable instrument, lock-free command queue, layer routing | `Sources/SundayKeysCore/Audio/` |
 | Build, patches | patch bank, gapless switching, live layer editing, JSON persistence | `Sources/SundayKeysCore/Patch/`, `Sources/SundayKeysApp/`, run `42724195726` |
-| Test | queue stress, envelope, release, bounded stealing, split exclusion, patch persistence and switching, plus the earlier parsing, curve and range tests | `Tests/SundayKeysCoreTests/`, run `42724195726` |
+| Build, effects | EQ, chorus, delay and reverb after the voice mix, owned by the patch | `Sources/SundayKeysCore/Audio/Effects/`, run `42726206476` |
+| Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
+| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping | `Tests/SundayKeysCoreTests/`, run `42726206476` |
 
-This is a working instrument with a working patch system, not a finished product. Still missing: the
-effects chain, sample assets, MIDI controller mapping, sessions and set lists, and an `.app` bundle.
+This is a working instrument with a working patch system, an original effects chain and a learned
+controller layout, not a finished product. Still missing: sessions and set lists, an `.app` bundle,
+and every hardware check that needs the Mac (audio device output, a real controller, a native
+launch).
 
 ## Audio milestone: what the instrument actually is
 
@@ -46,22 +50,25 @@ effects chain, sample assets, MIDI controller mapping, sessions and set lists, a
 
 ## Patch milestone: what a patch is
 
-- **Model.** `Patch` is an id, a name and `[KeyLayer]`. A `KeyLayer` carries an id, a name, a
-  `NoteRange`, a transpose, a gain, a timbre and an `enabled` flag. `PatchBank` is the versioned
-  list, and `PatchStore` reads and writes it as JSON at
-  `~/Library/Application Support/SundayKeys/patches.json`.
+- **Model.** `Patch` is an id, a name, `[KeyLayer]`, an `EffectsSettings` and a
+  `ControllerMapping`. A `KeyLayer` carries an id, a name, a `NoteRange`, a transpose, a gain, a
+  timbre and an `enabled` flag. `PatchBank` is the versioned list, and `PatchStore` reads and
+  writes it as JSON at `~/Library/Application Support/SundayKeys/patches.json`.
 - **Persistence.** Writes are atomic and create the directory, so a crash mid-save cannot leave a
   half-written bank. A missing file is not an error: the starter bank loads and the player gets an
-  instrument rather than an empty window. `KeyLayer` decodes with documented defaults (transpose 0,
-  gain 1, timbre keys, enabled true), so a bank written before a field existed still loads.
+  instrument rather than an empty window. `KeyLayer`, `Patch`, `EffectsSettings` and
+  `ControllerMapping` all decode with documented defaults, so a bank written before a field existed
+  still loads.
 - **Switching is gapless.** `setPatch` swaps the producer-side router, publishes each layer's timbre
-  through the existing SPSC ring as `setLayerTimbre` commands, and then releases every sounding
-  voice. Release is the same 220 ms fade, so the change is heard as a tail under the new patch
-  rather than as a gap, and no key held across the switch can hang on a layer the new patch dropped.
-  Nothing in the graph is rebuilt, so no allocation, lock or dropped buffer enters the audio path.
-- **Live edits do not cut notes.** `setPatch(_:releasingVoices:false)` updates ranges, gains and
-  timbres without all-notes-off. The app uses that path for checkbox, stepper and slider edits, so
-  the chord under the player's hands keeps sounding while a layer is being adjusted.
+  through the existing SPSC ring as `setLayerTimbre` commands, applies the new patch's effects and
+  releases every sounding voice. Release is the same 220 ms fade, so the change is heard as a tail
+  under the new patch rather than as a gap, and no key held across the switch can hang on a layer
+  the new patch dropped. Nothing in the graph is rebuilt, so no allocation, lock or dropped buffer
+  enters the audio path.
+- **Live edits do not cut notes.** `setPatch(_:releasingVoices:false)` updates ranges, gains,
+  timbres and effect settings without all-notes-off. The app uses that path for checkbox, stepper,
+  slider and controller edits, so the chord under the player's hands keeps sounding while a value is
+  being changed.
 - **App surface.** Patch picker with previous/next, rename, new (a copy of the current patch), delete
   (guarded so the bank is never empty) and an explicit Save. A program change selects the patch with
   that index, which is how a foot switch walks a set list. Each layer row edits enable, low and high
@@ -69,20 +76,128 @@ effects chain, sample assets, MIDI controller mapping, sessions and set lists, a
 - **Defaults.** Two layers: Keys 36 to 96 at gain 0.85 and Bell 72 to 96 at gain 0.45, so the overlap
   sounds twice and notes below 72 sound once.
 
-What the tests cover: the bank round-trips through disk, a relaunch over the same file sees the same
-values and the same patch ids, a missing file loads the starter bank, a layer written before `enabled`
-existed still loads, saving creates the directory, a disabled layer never sounds, ranges exclude
-notes, transpose and gain survive routing, a live edit leaves voices alive and reaches the next
-note, a switch stays audible and releases every voice, the new routing applies to later notes, and
-switching inside a live render loop, including one on another thread, never falls silent.
+## Effects milestone: an original chain, per patch
+
+Chain order is EQ, chorus, delay, reverb, applied after the voice mix inside
+`RealtimeKeysoundEngine.render`. Every processor is original code written from the design here; none
+of it is derived from the original app's DSP, and the analysis still records its effect parameters as
+**Unknown**.
+
+- **Ranges are ours and documented.** `EffectRanges` holds them in one place: mix 0 to 1, reverb
+  decay and damping 0 to 1, chorus rate 0.05 to 6 Hz, chorus depth 0 to 1, delay time 20 ms to
+  1.2 s, delay feedback 0 to 0.9, EQ gain -18 to +18 dB. Every processor clamps again on the render
+  thread, so a value that arrived from an old bank or a controller cannot destabilise a filter.
+- **Reverb.** Four damped combs at 29.7, 37.1, 41.3 and 43.9 ms plus two allpasses at 5.0 and 1.7 ms,
+  with wet gain 0.9. Decay moves comb feedback from 0.35 to 0.93 (`0.35 + 0.58 * decay`, clamped),
+  damping moves a one-pole lowpass inside each comb up to a coefficient of 0.7. These delay times are
+  chosen for this implementation; they are not Freeverb's and not measured from the original.
+- **Chorus.** A 50 ms line read at a 12 ms base delay swept up to 8 ms by a sine LFO, mixed with the
+  dry signal. Rate and depth are the two controls.
+- **Delay.** A 1.2 s line with a 30 ms glide to the target time, so moving the control on a held note
+  bends the echo instead of clicking; feedback is clamped so repeats always decay.
+- **EQ.** One-pole splits at 250 Hz and 3 kHz with a gain per outer band and the middle band
+  untouched. The three bands sum exactly to the input, which is why the stage is bit-transparent at
+  unity gain. Because the split is one pole, a gain is a shelf rather than a full cut at the corner:
+  a 6 kHz tone is about 89 percent inside the high band, measured at 0.555 through a -12 dB high cut.
+- **Bypass is exact.** A disabled processor clears its state and returns before touching the buffer,
+  so bypass is bit-for-bit dry; the chain bypass test asserts sample equality, not approximate
+  equality. Re-enabling starts from a clear tail rather than replaying what was there before.
+- **Settings reach the render thread without a lock.** `EffectChain` publishes a whole
+  `EffectsSettings` through a seqlock on a `UInt64` using the `CSync` atomics: the writer stores an
+  odd sequence, writes the settings, then stores the even sequence; the reader takes the sequence,
+  copies the settings, re-reads it, and discards a torn read, keeping the previous settings for one
+  more block. Nothing allocates or locks on the render thread, and a settings change mid-chord is a
+  parameter change rather than a cut.
+- **Buffers are allocated once.** Every delay line and filter state is allocated in the processor's
+  `init`, which runs on the control thread with the graph, never inside the render block.
+- **Defaults keep old banks dry.** Every effect starts bypassed, so a patch saved before effects
+  existed sounds exactly as it did, and an engine built straight from layers stays dry, which is why
+  the envelope, split and stealing tests are untouched. `Patch.starter`, the patch the app opens
+  with, engages only a short reverb (mix 0.18, decay 0.5, damping 0.4).
+- **Persistence.** Effects live in `Patch`, `PatchBank.currentVersion` is 3, and `Patch` decodes
+  `effects` with `decodeIfPresent`, so a version 1 or 2 bank loads with the chain bypassed.
+
+What the effects tests cover: a reverb tail that is audible a second after the input stops, quieter
+than the burst, and gone after seven seconds; a bypassed reverb that does not leak its tail; a single
+impulse reappearing at exactly 4800 samples through a fully wet 100 ms delay with nothing before it;
+repeats scaled by the feedback (0.5, then 0.25) at 4800-sample spacing; a chorus whose difference
+signal moves as the delay sweeps; an EQ that is bit-transparent at unity gain, lifts the low band,
+cuts the high band and leaves the other band alone; a bypassed chain that returns the buffer
+unchanged; the whole chain staying finite, bounded and decaying two and a half seconds after the
+input stops; the engine rendering a reverb tail after every voice is freed; a dry engine falling to
+exactly zero after release; an effect change on a held note that neither releases the voice nor drops
+it to silence; a patch switch that replaces the settings and does not inherit the previous tail;
+effect updates from another thread while the render loop runs; and the whole chain surviving a bank
+round trip while a bank written before effects existed loads dry.
+
+## Controller milestone: learned, per patch
+
+- **Model.** `ControllerTarget` names what a control moves: one target per layer gain, plus reverb
+  mix and decay, delay mix and feedback, chorus mix and depth, and the two EQ gains.
+  `ControllerMapping` holds `ControllerBinding` values of controller number, optional channel and
+  target.
+- **The layout belongs to the patch.** Two patches can want the same knob to do different things, and
+  a restored session has to restore what the knobs do as well as what the keys sound like, so the
+  mapping is stored in `Patch` and survives save and relaunch with everything else.
+- **Learning replaces rather than stacks.** A target carries one controller and a controller carries
+  one target; binding either direction removes the previous pairing, so a relearned knob cannot fire
+two parameters at once.
+- **Channel precedence.** A binding for the exact channel wins over an any-channel binding, which
+  lets a controller split across channels be assigned per channel while the any-channel default keeps
+  answering everywhere else.
+- **Values reach both ends.** A 7-bit value maps linearly onto a range, with 0 exactly at the lower
+  bound and 127 exactly at the upper, so a control can dial a parameter fully off and fully on.
+- **A mapping can outlive a layer.** A target naming a layer the patch no longer has is ignored and
+  reported as not moved; nothing else changes.
+- **Defaults are chosen, not recovered.** `ControllerMapping.standard` binds CC 7 to the first layer's
+  gain, CC 1 to reverb mix, CC 11 to delay mix and CC 74 to chorus mix. The analysis records the
+  original app's CC assignments as **Unknown**, so these are this instrument's defaults and any of
+  them can be relearned.
+- **App surface.** A mapping panel lists every target with its CC and channel, a Learn button that
+  waits for the next control change (and applies the value that taught it, so the player hears where
+  the knob already is), and a Clear button. A control change on a bound controller goes through the
+  same no-release path as a slider, so turning a knob cannot cut a held chord.
+
+What the controller tests cover: both ends and the midpoint of the value mapping; replacement in both
+binding directions; channel precedence; unbinding; a bound change moving only its own parameter and
+no layer; an unbound controller changing nothing at all; a layer gain moving inside its clamp while
+the other layer is untouched; a target whose layer is gone being ignored; the standard layout
+answering on any channel; the target list being free of duplicates; the mapping surviving a bank round
+trip with its channel; a version 2 bank loading the standard layout; and a new patch starting with it.
+
+## Remote development: what CI actually does
+
+The local Mac has been unreachable for this whole stretch of work, so every result in this log comes
+from the `macos-15` runner and nothing is claimed from a local build. `.github/workflows/build.yml`
+runs on every push to `main`, on pull requests and on demand, with `contents: read`, a concurrency
+group that supersedes an older run, and a 25-minute timeout. Its steps are:
+
+1. check out the repository and print the toolchain: `xcode-select -p`, `xcodebuild -version`,
+   `swift --version`, `xcrun --find swift`;
+2. `swift package resolve` and `swift package show-dependencies`, which validate the manifest and
+   prove the package needs no network beyond the checkout;
+3. `swift build --build-tests -v`, with the log kept for the next step;
+4. surface up to twenty unique compiler warnings as check-run warnings, and on failure surface up to
+   twenty-five `error:` lines as check-run errors, so a red run is readable without the job log;
+5. `swift test -v`, with the same error and assertion surfacing on failure;
+6. `swift build -c release`, which compiles the optimised configuration as well as the debug one;
+7. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
+   present) or 1 (tools missing) or if it fails to report the toolchain, which is the smoke test for
+   the script's reporting and exit codes.
+
+What that does not cover, and this log will not pretend otherwise: the install path of
+`tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
+machine), bundling a signed `.app`, starting `AVAudioEngine` against a real output device, CoreMIDI
+against a real controller, and anything that needs to be heard. The DSP is validated by offline
+tests that measure sample values; nobody has listened to it on this hardware.
 
 ## Decompilation: awaiting external access
 
 No artifact that can be decompiled is reachable from this environment. The shell tool refused every
-call with "run_terminal_command is not currently available", so no process can be started, no path
-can be examined and no Ghidra run is possible. That was still true this session. The repository
-contains only docs, tools and Swift and C sources: no Mach-O, `.app`, AUv3 bundle, `.aupreset`, CAF
-payload, Ghidra project or prior decompilation export. Details and the exact access required are in
+call again this session ("run_terminal_command is not currently available"), so no process can be
+started, no path can be examined and no Ghidra run is possible. The repository contains only docs,
+tools and Swift and C sources: no Mach-O, `.app`, AUv3 bundle, `.aupreset`, CAF payload, Ghidra
+project or prior decompilation export. Details and the exact access required are in
 [`re/access-determination.md`](re/access-determination.md).
 
 Required to resume: the Mac awake with the Freebuff desktop client connected, the app installed,
@@ -90,23 +205,23 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Effects chain: EQ, chorus, delay and reverb as source-level DSP after the voice mix, with tests
-   for gain, stability and bypass. Effect settings belong in `Patch` and have to survive the same
-   switch path the layers already use.
-2. MIDI controller mapping: CC to layer gain and effect parameters, learned and stored with the
-   patch. Program change already selects a patch by index.
-3. Session and setlist management on top of the patch bank.
-4. Bundle the package into a signed `.app` and add an audio-unit or standalone build target.
-5. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
+1. Session and setlist management on top of the patch bank: an ordered set list per session, next and
+   previous through it, and a saved position, so a service can be played without touching the window.
+2. Bundle the package into a signed `.app` and add an audio-unit or standalone target, then use the
+   Mac for the first hardware validation: device output, a real controller, and a listen to the
+   effects chain.
+3. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
+   behaviour of a controller that sends on several channels.
+4. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
    `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,
    `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and
    commit the extracts under `docs/re/` with provenance.
 
 ## Build verification
 
-`.github/workflows/build.yml` runs `swift build --build-tests` and `swift test` on a `macos-15`
-runner for every push to main. The workflow republishes compiler and test errors as check-run
-annotations, so a failing run is readable without the job log.
+`.github/workflows/build.yml` runs the steps listed above on a `macos-15` runner for every push to
+main, and republishes compiler and test errors as check-run annotations, so a failing run is readable
+without the job log.
 
 | commit | run | conclusion |
 | --- | --- | --- |
@@ -118,6 +233,12 @@ annotations, so a failing run is readable without the job log.
 | `b3e20b5` | [42723395400](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42723395400) | failure: one line of the new `setPatch` doc comment lost its `///` prefix, so it was parsed as code. Fixed in `6f08875`. |
 | `c1fccc2` | [42724058815](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42724058815) | failure, one test: the persistence fixture minted fresh random patch ids on every call, so the relaunch equality assertion could never hold. Fixed in `bd43567`. |
 | `bd43567` | [42724195726](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42724195726) | success: build and all suites pass, including the patch persistence, resolution, switching and live-edit tests. |
+| `4c7b179` | [42724369999](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42724369999) | success: the patch milestone write-up. |
+| `5266e48` | [42725183689](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42725183689) | success: the effects chain compiles and every pre-existing suite still passes. |
+| `2f9af82` | [42725884346](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42725884346) | failure, one test of the new suite: `testEQBandsLiftAndCutTheirBand` demanded a full -12 dB at 6 kHz and measured 0.555. A one-pole 3 kHz split leaves about 89 percent of a 6 kHz tone in the high band, so the assertion was wrong, not the DSP. Also dropped the cache action that emitted a Node 20 deprecation warning. Fixed in `242d555`. |
+| `242d555` | [42726206476](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726206476) | success: the EQ test now asserts the shelf shape and band isolation, the whole effects suite passes, the release build passes and the bootstrap smoke step passes. |
+| `8a95eb0` | [42726778003](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726778003) | failure, before tests ran: `ContentView.swift:329` passed a ternary mixing `.secondary` (a hierarchical style) and `.orange` (a colour) to `foregroundStyle`, which has no common type. Fixed in `34a0c0e`. |
+| `34a0c0e` | [42726991886](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726991886) | the one-line fix; the first run to build and exercise the controller mapping tests. |
 
 Treat a commit as built only when its own check run is green; later commits re-run the workflow.
 
@@ -129,9 +250,11 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | 234 unattributable dispatch references | descriptors outside the local type table | a wider type table, or a capture |
 | 31 types with no module name | no recoverable parent chain or mangled symbol | a capture |
 | velocity curve, split range semantics, voice stealing | not decompiled | awaiting external access |
-| effect parameter ranges and defaults | not decompiled | awaiting external access |
+| the original app's effect parameter ranges and defaults | not decompiled | awaiting external access; this implementation's ranges are its own design and are documented in `EffectRanges` |
+| the original app's MIDI CC assignments | not decompiled | awaiting external access; this implementation's default layout is its own design and can be relearned |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
-| effects, controller mapping, sessions, `.app` bundle | not implemented | next actions 1 to 4 |
+| sessions, set lists, `.app` bundle | not implemented | next actions 1 and 2 |
+| audio device output, real controller, a listen to the chain | need the unreachable Mac | next action 2 |
 
 ## Decisions recorded
 
@@ -148,6 +271,16 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | patches are switched in place through the command ring | rebuilding the graph would click, allocate and drop buffers on the audio thread |
 | a live edit of the playing patch does not release voices | releasing on every slider step would cut the chord the player is holding |
 | the persistence fixture uses fixed patch ids | a decoded bank has to keep patch identity, and random ids could never assert it |
+| effects are stored in the patch, not the engine | a patch is the whole sound; an effect that outlived its patch would bleed into the next one |
+| every effect starts bypassed | a bank written before effects existed, and an engine built from layers alone, must sound exactly as they did |
+| effect settings travel through a seqlock | a whole-settings publish with no lock and no allocation is the only way to change a parameter on a held note safely |
+| the chain is EQ, chorus, delay, reverb | the order that keeps modulation out of the reverb tail and lets the EQ shape what the effects receive |
+| a bypassed processor returns before touching the buffer | bypass has to be bit-exact dry, not approximately dry |
+| the EQ is a shelf, not a brick-wall split | one-pole splits sum to the input exactly, which keeps unity gain transparent |
+| the controller layout is stored per patch | two patches want the same knob to do different things, and a session has to restore both |
+| learning replaces both directions | a knob must never move two parameters, and a parameter must never have two knobs |
+| a controller value maps onto the full range with exact endpoints | a control that cannot reach the end of its range is a bug the player notices |
+| the CI cache action was removed | it emitted a Node 20 deprecation warning for a build that takes under a minute |
 
 ## Commit trail
 
@@ -173,5 +306,11 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | `84a0756` | audio controller owns and switches the current patch |
 | `c1fccc2` | bank, switching and the layer editor wired into the app; live edits do not release voices |
 | `bd43567` | persistence fixture with stable patch ids, plus the live-edit tests |
+| `5266e48` | EQ, chorus, delay and reverb processors, the chain with its seqlock, per-patch settings |
+| `2f9af82` | effects tests, effects panel, CI toolchain and dependency steps, bootstrap smoke step |
+| `242d555` | EQ test asserts the shelf shape and band isolation; cache action removed |
+| `86eea5a` | controller targets, bindings, value mapping and per-patch persistence with tests |
+| `8a95eb0` | learn mode in the app model and the mapping panel |
+| `34a0c0e` | the `foregroundStyle` ternary fixed to a single type |
 
 Earlier analysis commits are listed in the analysis document itself.
