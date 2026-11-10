@@ -61,7 +61,7 @@ swift test           # core tests
 tools/bundle_app.sh  # release build, then build/SundayKeys.app
 tools/launch_smoke.sh  # start it, prove it reached its run loop, prove it exited 0
 tools/audio_smoke.sh   # press Start from inside it, prove the render block made a voice
-tools/midi_smoke.sh    # create the MIDI client and port, prove the source list was read
+tools/midi_smoke.sh    # create the client and port, publish a virtual source, prove it connects
 open build/SundayKeys.app
 ```
 

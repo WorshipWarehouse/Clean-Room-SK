@@ -507,7 +507,8 @@ group that supersedes an older run, and a 25-minute timeout. Its steps are:
 9. `tools/audio_smoke.sh`, which starts the audio graph from inside the app, requires a rendered voice
    and a clean exit, and reports a machine with no output device as a limitation with the app's own
    line rather than as a pass;
-10. `tools/midi_smoke.sh`, which creates the CoreMIDI client and input port from inside the app,
+10. `tools/midi_smoke.sh`, which creates the CoreMIDI client and input port from inside the app, publishes a virtual
+source of its own and requires the engine to enumerate and connect it,
     requires the client marker and a source count and a clean exit, and reports a machine with no MIDI
     source as a limitation with the app's own line rather than as a pass;
 11. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
@@ -518,8 +519,7 @@ What that does not cover, and this log will not pretend otherwise: the install p
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
 machine, and only its check mode runs in CI); anything visual, since no screenshot is taken and no UI
 test exists; anything audible, since the audio probe counts a rendered voice, which says the callback
-ran but nothing about how it sounded; and the MIDI connect path, since the runner has no source to
-connect to. Nobody has listened to this, played it, or clicked through it on this hardware.
+ran but nothing about how it sounded; and the MIDI receive path, since nothing has ever been sent from the virtual source. Nobody has listened to this, played it, or clicked through it on this hardware.
 
 ## Decompilation: awaiting external access
 
@@ -740,14 +740,6 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the tracker owns the connect rules, not the service | the rules are what a regression would break, and CoreMIDI in the app target cannot be exercised by `swift test` on a machine with no source |
 | a refusal is kept while its source is present and unconnected | a notification that changes nothing must not erase a real fault, and a device that recovers must stop being accused |
 | the status is recomputed from a report, not patched in place | one derivation for a start and a refresh means the wording cannot drift between pressing Start and plugging a controller in |
-| `a84c56e` | `MIDIConnectProbe`, the attempt type and the six-outcome classification in the core module; failed run `42739979656` |
-| `769b43f` | `VirtualMIDISource` and `MIDIConnectProbeTests` |
-| `9336197` | `MIDIInputService.refresh()`, so a source listed a moment late is not reported as missing |
-| `a03ec8c` | `SUNDAYKEYS_PROBE_MIDI_CONNECT` in `LaunchProbe` |
-| `78ce36e` | `tools/midi_smoke.sh` runs both probes and publishes the connect counts; failed run `42739979656` |
-| `5a2e4c6` | `MIDIConnectProbe.exitCode` and `provesConnectPath` forwarded; failed run `42740177399` |
-| `7b8567f` | the exit-status expectation corrected; run `42740337754` proved the connect and failed only on the pid suffix |
-| `7d5cd17` | the pid stripped from the status before it is compared; verified by run `42740507134` |
 
 ## Commit trail
 
@@ -804,3 +796,13 @@ without the job log. Rows are added only for runs whose conclusion has been read
 
 Earlier analysis commits, the toolchain work and the corpus extractors are listed in
 [`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md).
+| `a84c56e` | `MIDIConnectProbe`, the attempt type and the six-outcome classification in the core module; failed run `42739979656` |
+| `769b43f` | `VirtualMIDISource` and `MIDIConnectProbeTests` |
+| `9336197` | `MIDIInputService.refresh()`, so a source listed a moment late is not reported as missing |
+| `a03ec8c` | `SUNDAYKEYS_PROBE_MIDI_CONNECT` in `LaunchProbe` |
+| `78ce36e` | `tools/midi_smoke.sh` runs both probes and publishes the connect counts; failed run `42739979656` |
+| `5a2e4c6` | `MIDIConnectProbe.exitCode` and `provesConnectPath` forwarded; failed run `42740177399` |
+| `7b8567f` | the exit-status expectation corrected; run `42740337754` proved the connect and failed only on the pid suffix |
+| `7d5cd17` | the pid stripped from the status before it is compared; verified by run `42740507134` |
+| `2d8738c` | the one-shot recorder workflow, because the log is larger than one API call can replace |
+| `175cb77` | the connect milestone, the revised next actions and the README section; written by recorder run `42741151494` and read back at that commit |
