@@ -14,7 +14,8 @@ Nothing here is produced by executing the original app, and no original source w
 | implementation plan | contracts, milestones, unknowns |
 | app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence, an original EQ/chorus/delay/reverb chain per patch, a learned per-patch controller layout, and an ordered set list with a play head |
 | bundled app | `tools/bundle_app.sh` assembles and ad-hoc signs `SundayKeys.app`; CI lints the plist and verifies the signature on every push |
-| not yet launched | the bundle has never been opened, so the window, audio output and controller behaviour are untested |
+| launched in CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, watches the run loop service a timer, and sees a status 0 exit; no person has seen the window |
+| not yet verified on hardware | no audio device has been driven, no controller connected, nothing listened to |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -35,28 +36,36 @@ dispatch references over 2,527 descriptors.
 | `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument, patch model and bank store, controller mapping, set list |
 | `Sources/SundayKeysCore/Audio/Effects/` | EQ, chorus, delay and reverb processors and the chain that publishes their settings |
 | `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker, set list panel, layer editor, effects panel, controller mapping panel, CoreMIDI input, AVAudioEngine host |
+| `Sources/SundayKeysApp/LaunchProbe.swift` | startup markers and the self-quit timer the launch check reads |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
-| `.github/workflows/build.yml` | resolve, build, test, release build, bundle and bootstrap smoke check on a macOS runner |
+| `.github/workflows/build.yml` | resolve, build, test, release build, bundle, launch and bootstrap smoke check on a macOS runner |
 | `tools/bundle_app.sh` | assembles, signs and verifies `SundayKeys.app` from the release build |
+| `tools/launch_smoke.sh` | starts the bundle, asserts its startup markers and a clean exit, and fails with the captured output otherwise |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
 
-## Build the app
+## Build and run the app
 
 ```bash
-swift build        # library and app target
-swift test         # core tests
+swift build          # library and app target
+swift test           # core tests
 tools/bundle_app.sh  # release build, then build/SundayKeys.app
+tools/launch_smoke.sh  # start it, prove it reached its run loop, prove it exited 0
 open build/SundayKeys.app
 ```
 
 The same commands run on a macOS runner for every push, and the check run on a commit carries the
 result: the workflow also resolves the manifest, reports unique compiler warnings, builds the release
-configuration, runs the bundler and verifies its output, and runs `bash tools/bootstrap.sh --check` as
-a smoke test. There is no Xcode project: the package builds the app target and the bundler wraps it
-into an `.app` with its own identifier (`com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0)
-and an ad-hoc signature, so it can be launched on Apple silicon without a developer certificate. That
-signature is not distribution signing and nothing is notarised. The install path of the bootstrap
-script is not exercised anywhere, because it installs Homebrew casks and needs sudo.
+configuration, runs the bundler and verifies its output, launches the bundle, and runs
+`bash tools/bootstrap.sh --check` as a smoke test. There is no Xcode project: the package builds the
+app target and the bundler wraps it into an `.app` with its own identifier
+(`com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0) and an ad-hoc signature, so it can be
+launched on Apple silicon without a developer certificate. That signature is not distribution signing
+and nothing is notarised. The install path of the bootstrap script is not exercised anywhere, because
+it installs Homebrew casks and needs sudo.
+
+To run it by hand once a Mac is available: `tools/bundle_app.sh`, then `open build/SundayKeys.app`,
+press Start, and play the on-screen keyboard or a connected controller. `swift run SundayKeysApp`
+starts the same app without a bundle, which is convenient for a quick look and not how it ships.
 
 ## The instrument
 
@@ -184,8 +193,40 @@ checks its own output, and the CI step fails if any check does.
   executable matching the one placed.
 
 Run [`42730684997`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) is the
-first to run the step, and it passed. The bundle has never been launched: no window has been opened,
-no audio device has been started and no controller has been connected, because that needs the Mac.
+first to run the bundle step, and it passed.
+
+## Launching it
+
+A bundle that assembles is not an app that runs, so the workflow now starts it. Two marks make the
+difference between a guess and an observation: that the app reached its run loop, and that it left
+through a normal exit instead of a signal.
+
+- `Sources/SundayKeysApp/LaunchProbe.swift` prints `SundayKeysApp: did finish launching` from
+  `applicationDidFinishLaunching` and `SundayKeysApp: root view appeared` once SwiftUI installs the
+  root view. A live PID proves only that the loader resolved symbols; these lines say where the app
+  got to.
+- `SUNDAYKEYS_PROBE_EXIT_AFTER=<seconds>` makes the app quit itself through `NSApp.terminate` after
+  that long. A fired timer shows the run loop is being serviced, and the status 0 is a real exit. With
+  the variable unset the app behaves normally, so nothing about a player's launch changes.
+- `tools/launch_smoke.sh` prints the session it found (OS version, `launchctl managername`, whether
+  `WindowServer` runs, whether the `gui/<uid>` domain is reachable, whether it is over SSH), starts
+  the bundle's executable with the probe armed, waits up to 20 seconds for both markers, waits for the
+  exit, and requires status 0. A dead process, a missing marker, a process that will not quit or a
+  non-zero status each fail the step with the app's own output. Liveness is read from `ps -o state=`,
+  so a finished child is not mistaken for a hang.
+- it also attempts a LaunchServices launch (`open -n`) and reports whether a process appeared and
+  stayed alive. That path cannot carry the probe or be captured, and stopping it takes a signal, so
+  it is evidence rather than the pass condition.
+
+Run [`42731763842`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731763842) on
+`7cb9a17` is where this first passed: every step green, and "Launch the app" took seven seconds. Since
+the script only exits 0 after asserting the markers, the timer and the exit status, that green step
+means the bundle loaded, AppKit finished launching, the root view was installed, the run loop serviced
+a timer and the app exited 0 on a runner with no controller attached and nothing pressed.
+
+What it does not show: a window nobody has looked at, audio from an output device, a controller, or
+the audio graph and MIDI client starting — those are created when Start is pressed, and no launch
+check presses it. Nothing here has been listened to.
 
 ## Reproduce the analysis
 
@@ -239,10 +280,9 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
   semantics, MIDI CC mappings, session contents, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- The bundle is assembled and its plist and signature are checked on the runner, but it has never
-  been launched: no window, audio device, controller or native menu has been exercised, because the
-  Mac they need has been unreachable. No local build has been run; every result comes from the macOS
-  runner.
+- The bundle is assembled, signed, checked and started on the runner, but no person has seen its
+  window: no audio device has been driven, no controller connected, no menu used, and nothing has
+  been listened to. No local build has been run; every result comes from the macOS runner.
 - The set list panel, the effects panel and the controller panel have never been looked at on a
   screen.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
