@@ -132,6 +132,10 @@ public enum MIDIEventFailure: Error, Equatable, Sendable {
 /// note off and is translated here, so no downstream stage has to special case
 /// it. System messages are refused rather than guessed at, because they vary in
 /// length and this layer has no use for them.
+///
+/// The decoder is pure and has no isolation: it reads bytes and returns values,
+/// so it can be called from any context, including a test that never involves
+/// the main actor.
 public enum MIDIEventDecoder {
     /// Decodes one complete message. Extra bytes past the message are ignored,
     /// so a caller who hands in a whole packet still gets its first message.
@@ -273,6 +277,14 @@ public enum MIDIEventDecoder {
 /// from here through `KeysoundNoteTarget`, the same note path the arpeggiator
 /// plays into; the app model is the transport the window's MIDI input uses, and
 /// the tests pass a transport that records what it was handed.
+///
+/// The contract is main-actor by construction, because every real transport is
+/// UI state: the app model owns published mirrors, the engine it voices and the
+/// panel it republishes. Declaring the requirement on the main actor makes that
+/// true in the type system instead of leaving it as an assumption a caller has
+/// to remember, so a conformance cannot be written that would touch UI state
+/// from a render thread.
+@MainActor
 public protocol MIDIEventTransport: AnyObject {
     func noteOn(note: UInt8, velocity: UInt8, channel: UInt8)
     func noteOff(note: UInt8, velocity: UInt8, channel: UInt8)
@@ -289,6 +301,11 @@ public protocol MIDIEventTransport: AnyObject {
 /// happened. That is what makes the whole path testable through an injected
 /// transport, in the same way the step clock is testable through an injected
 /// host clock.
+///
+/// The two methods that reach a transport are main actor isolated, matching the
+/// contract above. The counters, the last event and the status line stay plain
+/// values, so reading what the router remembers needs no isolation at all; only
+/// the delivery crosses into the transport's actor.
 public struct MIDIEventRouter: Equatable {
     /// How many events reached the transport.
     public private(set) var delivered = 0
@@ -296,7 +313,6 @@ public struct MIDIEventRouter: Equatable {
     public private(set) var rejected = 0
     public private(set) var lastDelivered: MIDIEvent?
     public private(set) var lastFailure: MIDIEventFailure?
-
     /// The line before anything has arrived. Kept as one constant so the router
     /// and the model cannot word it differently.
     public static let initialStatusLine = "MIDI route: nothing yet"
@@ -306,6 +322,7 @@ public struct MIDIEventRouter: Equatable {
     /// Decodes a packet and delivers every event in order, returning the
     /// refusals so the caller can report them.
     @discardableResult
+    @MainActor
     public mutating func route(
         _ bytes: [UInt8],
         to transport: MIDIEventTransport
@@ -325,6 +342,7 @@ public struct MIDIEventRouter: Equatable {
     }
 
     /// Hands one already decoded event to the transport and counts it.
+    @MainActor
     public mutating func deliver(_ event: MIDIEvent, to transport: MIDIEventTransport) {
         switch event {
         case let .noteOn(note, velocity, channel):
@@ -344,9 +362,11 @@ public struct MIDIEventRouter: Equatable {
         lastDelivered = event
     }
 
-    /// What the panel shows. The wording is pinned by tests, and a refusal is
-    /// named rather than counted, so a malformed packet does not read like a
-    /// note that simply arrived.
+    /// What the panel shows.
+    ///
+    /// The wording is pinned by tests, and a refusal is named rather than
+    /// counted, so a malformed packet does not read like a note that simply
+    /// arrived.
     public var statusLine: String {
         guard delivered > 0 || rejected > 0 else { return Self.initialStatusLine }
         var line = "MIDI route: \(delivered) delivered, \(rejected) rejected"

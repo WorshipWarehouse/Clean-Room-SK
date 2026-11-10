@@ -8,6 +8,13 @@ import SundayKeysCore
 /// transport is a recording object, and the only thing that moves is the byte
 /// array the test hands in, so the order of delivery and the exact refusal are
 /// both things the test can state.
+///
+/// The class is main actor isolated because the transport contract is: delivery
+/// reaches UI state, so `route` and `deliver` are main actor isolated on the
+/// router and the recording transports are main actor types. The decoder is pure
+/// and needs no isolation, which is why the decoding cases would pass unchanged
+/// on any executor.
+@MainActor
 final class MIDIEventRoutingTests: XCTestCase {
     func testEverySupportedMessageTypeIsDeliveredInOrder() {
         let transport = RecordingTransport()
@@ -268,7 +275,9 @@ final class MIDIEventRoutingTests: XCTestCase {
 // MARK: - Recording doubles
 
 /// A transport that remembers every call, in order, so a test can compare the
-/// whole delivery against a literal array.
+/// whole delivery against a literal array. Main actor isolated because that is
+/// what the transport contract requires.
+@MainActor
 private final class RecordingTransport: MIDIEventTransport {
     private(set) var events: [MIDIEvent] = []
 
@@ -298,6 +307,10 @@ private final class RecordingTransport: MIDIEventTransport {
 }
 
 /// The note path the arpeggiator plays into, recorded the same way.
+///
+/// This one stays non-isolated, because `KeysoundNoteTarget` is: the engine's
+/// note path is reachable from the render side, and only the transport that
+/// wraps it is main actor bound.
 private final class RecordingKeysoundTarget: KeysoundNoteTarget {
     private(set) var notes: [String] = []
 
@@ -313,6 +326,7 @@ private final class RecordingKeysoundTarget: KeysoundNoteTarget {
 /// Sends the two note events to a keysound target and records the rest, which is
 /// the arrangement the app model uses: notes reach the engine, everything else
 /// reaches the service that acts on it.
+@MainActor
 private final class KeysoundTransport: MIDIEventTransport {
     private let target: KeysoundNoteTarget
     private(set) var others: [MIDIEvent] = []
