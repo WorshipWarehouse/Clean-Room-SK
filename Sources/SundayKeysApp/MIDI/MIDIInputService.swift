@@ -126,20 +126,28 @@ final class MIDIInputService {
         return verdict
     }
 
+    /// Reads a packet list the way MIDI 1.0 is defined.
+    ///
+    /// A packet is not a message: CoreMIDI concatenates messages and running
+    /// status is legal on the wire, so a packet can carry a note on, a note off
+    /// and a control change at once. Reading only the first three bytes of such a
+    /// packet kept the note on and dropped the rest, which is why the receive
+    /// probe saw a note on and no note off. The whole packet goes to the core
+    /// parser now, so nothing behind the first message is lost.
     private func receive(_ packetList: UnsafePointer<MIDIPacketList>) {
         var packet = packetList.pointee.packet
         let count = Int(packetList.pointee.numPackets)
 
         for _ in 0..<count {
-            let length = Int(packet.length)
-            if length >= 2 {
-                var bytes: [UInt8] = [packet.data.0, packet.data.1]
-                if length >= 3 {
-                    bytes.append(packet.data.2)
-                }
-                if let message = MIDIMessage.parse(bytes) {
-                    onMessage?(message)
-                }
+            let length = min(
+                Int(packet.length),
+                MemoryLayout.size(ofValue: packet.data)
+            )
+            let bytes = withUnsafeBytes(of: packet.data) {
+                Array($0.prefix(length))
+            }
+            for message in MIDIMessage.parseAll(bytes) {
+                onMessage?(message)
             }
             packet = MIDIPacketNext(&packet).pointee
         }
