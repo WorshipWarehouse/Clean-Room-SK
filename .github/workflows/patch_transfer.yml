@@ -14,8 +14,12 @@ on:
 permissions:
   contents: read
 
+# Scoped to the commit on purpose. Scoping to the ref alone let one job that GitHub
+# kept marking in-progress with no steps hold the group, and every later run on main
+# sat pending behind it with nothing to say why. A group per commit cannot wedge the
+# workflow that way.
 concurrency:
-  group: patch-transfer-${{ github.ref }}
+  group: patch-transfer-${{ github.sha }}
   cancel-in-progress: true
 
 jobs:
