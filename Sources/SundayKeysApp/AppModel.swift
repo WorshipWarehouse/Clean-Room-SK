@@ -47,6 +47,13 @@ final class AppModel: ObservableObject {
     /// rebuild the message instead of appending to an already appended one.
     private var engineStatusLine = "Engine stopped"
 
+    /// Every message the input port parses is decoded into a typed `MIDIEvent` and
+    /// handed to this router, which delivers it to the transport below - this model -
+    /// and keeps count of what arrived and what it refused. The line is a mirror like
+    /// the arpeggiator's, so the window shows the same value the router holds.
+    @Published private(set) var midiRouteStatus = MIDIEventRouter.initialStatusLine
+    private var midiRouter = MIDIEventRouter()
+
     /// The whole bank the player switches between, and which patch of it is
     /// selected. This lives here rather than in the audio controller because the
     /// controller only ever knows the one patch it is voiced for.
@@ -107,8 +114,9 @@ final class AppModel: ObservableObject {
         ControllerTarget.all(for: layers)
     }
 
-    /// The one set list the window shows and drives. It is the bank's own list, not a
-    /// copy, so stepping here and stepping in a test go through the same model.
+    /// The one set list the window shows and drives.
+    /// It is the bank's own list, not a copy, so stepping here and stepping in a test
+    /// go through the same model.
     var setlist: Setlist {
         bank.setlist
     }
@@ -538,7 +546,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Writes what is playing, best effort. It is a hint about the next launch, so a
+    /// Writes what is playing, best effort.
+    /// It is a hint about the next launch, so a
     /// failed write costs the resume and nothing in the session, and the bank's own save
     /// path never depends on it.
     private func rememberSelection() {
@@ -595,7 +604,9 @@ final class AppModel: ObservableObject {
     private func applyController(controller: UInt8, value: UInt8, channel: UInt8) {
         guard let index = bank.index(of: selectedPatchID) else { return }
         var edited = bank.patches[index]
-        guard edited.apply(controllerValue: value, fromController: controller, channel: channel) != nil else {
+        guard
+            edited.apply(controllerValue: value, fromController: controller, channel: channel) != nil
+        else {
             return
         }
         bank.patches[index] = edited
@@ -613,9 +624,9 @@ final class AppModel: ObservableObject {
         return candidate
     }
 
-    /// Records a verdict from the service and republishes the status message
-    /// against the engine line, so a refresh replaces the MIDI part of the message
-    /// instead of appending to it.
+    /// Records a verdict from the service and republishes the status message against
+    /// the engine line, so a refresh replaces the MIDI part of the message instead of
+    /// appending to it.
     private func applyMIDIVerdict(_ verdict: MIDIStartVerdict) {
         midiStatusBoard.record(verdict)
         midiStatus = midiStatusBoard.status
@@ -658,42 +669,80 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// One message from the input port.
+    ///
+    /// The parser in the port is lenient and the routing layer is strict, so the two
+    /// meet here: the message becomes a typed `MIDIEvent`, the router delivers it to
+    /// this model as its transport, and the line the window shows is republished from
+    /// what the router counted. A message this layer does not model is named rather
+    /// than silently swallowed.
     private func handle(_ message: MIDIMessage) {
         guard isEngineRunning else {
             lastEvent = "ignored while stopped"
             return
         }
 
-        switch message {
-        case let .noteOn(note, velocity, channel):
-            audio.noteOn(note: note, velocity: velocity)
-            lastEvent = "note on \(noteName(note)) velocity \(velocity) ch \(channel + 1)"
-        case let .noteOff(note, _, channel):
-            audio.noteOff(note: note)
-            lastEvent = "note off \(noteName(note)) ch \(channel + 1)"
-        case let .controlChange(controller, value, channel):
-            if let target = learningTarget {
-                learningTarget = nil
-                updateSelectedPatch(appliesToEngine: false) { patch in
-                    patch.controllerMapping.bind(controller: controller, channel: channel, to: target)
-                }
-                bankStatus = "Bound cc \(controller) to \(target.label), not saved yet"
-                lastEvent = "learned cc \(controller) -> \(target.label)"
-            } else {
-                lastEvent = "cc \(controller) = \(value) ch \(channel + 1)"
-            }
-            // Learning also applies the value that taught it, so the player hears
-            // where the control already was instead of waiting for the next move.
-            applyController(controller: controller, value: value, channel: channel)
-        case let .programChange(program, channel):
-            // A program change selects the patch with that index, which is how a
-            // controller or a foot switch walks the bank.
-            lastEvent = "program \(program) ch \(channel + 1)"
-            selectPatch(at: Int(program))
-        case let .pitchBend(value, channel):
-            lastEvent = "bend \(value) ch \(channel + 1)"
-        case .other:
+        guard let event = MIDIEvent(message: message) else {
             lastEvent = "other message"
+            return
         }
+
+        midiRouter.deliver(event, to: self)
+        midiRouteStatus = midiRouter.statusLine
+    }
+}
+
+/// The model is the transport the MIDI router delivers into.
+///
+/// Each method is one event, and each one does what the old single switch did, so
+/// nothing about what a controller can already do changes: notes reach the same
+/// keysound path, a control change still learns and still moves its parameter, and
+/// a program change still selects that index. What is new is that every event now
+/// arrives through the router, so the count and the line in the window are the same
+/// numbers the delivery produced.
+extension AppModel: MIDIEventTransport {
+    func noteOn(note: UInt8, velocity: UInt8, channel: UInt8) {
+        audio.noteOn(note: note, velocity: velocity)
+        lastEvent = "note on \(noteName(note)) velocity \(velocity) ch \(channel + 1)"
+    }
+
+    func noteOff(note: UInt8, velocity: UInt8, channel: UInt8) {
+        audio.noteOff(note: note)
+        lastEvent = "note off \(noteName(note)) ch \(channel + 1)"
+    }
+
+    func controlChange(controller: UInt8, value: UInt8, channel: UInt8) {
+        if let target = learningTarget {
+            learningTarget = nil
+            updateSelectedPatch(appliesToEngine: false) { patch in
+                patch.controllerMapping.bind(controller: controller, channel: channel, to: target)
+            }
+            bankStatus = "Bound cc \(controller) to \(target.label), not saved yet"
+            lastEvent = "learned cc \(controller) -> \(target.label)"
+        } else {
+            lastEvent = "cc \(controller) = \(value) ch \(channel + 1)"
+        }
+        // Learning also applies the value that taught it, so the player hears
+        // where the control already was instead of waiting for the next move.
+        applyController(controller: controller, value: value, channel: channel)
+    }
+
+    func programChange(program: UInt8, channel: UInt8) {
+        // A program change selects the patch with that index, which is how a
+        // controller or a foot switch walks the bank.
+        lastEvent = "program \(program) ch \(channel + 1)"
+        selectPatch(at: Int(program))
+    }
+
+    func pitchBend(value: UInt16, channel: UInt8) {
+        // The engine has no bend destination yet, so the event is recorded and
+        // counted rather than pretended to have moved a pitch.
+        lastEvent = "bend \(value) ch \(channel + 1)"
+    }
+
+    func channelPressure(pressure: UInt8, channel: UInt8) {
+        // Same as bend: modelled, delivered and counted, with no destination in the
+        // engine at this point.
+        lastEvent = "pressure \(pressure) ch \(channel + 1)"
     }
 }

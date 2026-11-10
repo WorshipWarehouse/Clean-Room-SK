@@ -34,7 +34,6 @@ struct ContentView: View {
 
                     Button("All notes off") { model.panic() }
                     ClickSection(model: model)
-
                     Text(model.lastEvent)
                         .font(.system(.body, design: .monospaced))
                 }
@@ -48,21 +47,32 @@ struct ContentView: View {
                 SetlistSection(model: model)
 
                 effectsSection
-
                 ControllerSection(model: model)
 
                 KeyboardView(model: model)
                     .frame(height: 150)
 
                 GroupBox("MIDI inputs") {
-                    if model.midiSources.isEmpty {
-                        Text("No MIDI sources detected")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        ForEach(model.midiSources, id: \.self) { name in
-                            Text(name)
+                    VStack(alignment: .leading, spacing: 6) {
+                        if model.midiSources.isEmpty {
+                            Text("No MIDI sources detected")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            ForEach(model.midiSources, id: \.self) { name in
+                                Text(name)
+                            }
                         }
+
+                        Divider()
+
+                        // The routing layer's own line: how many typed events
+                        // reached the engine or the service, and what the last
+                        // refusal was when a packet could not be decoded.
+                        Text(model.midiRouteStatus)
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 Spacer()
@@ -116,7 +126,6 @@ struct ContentView: View {
                 Text(model.bankStatus)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
-
                 Divider()
 
                 ForEach(model.layers) { layer in
