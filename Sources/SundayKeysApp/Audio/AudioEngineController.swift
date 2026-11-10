@@ -32,6 +32,18 @@ final class AudioEngineController {
     private(set) var isRunning = false
     private(set) var sampleRate: Double = 0
 
+    /// The one permission every sounding request passes through.
+    ///
+    /// Keys, the MIDI transport and the arpeggiator all arrive at `noteOn`, so enforcing
+    /// here means there is no second place that could let a note through. It defaults to
+    /// permitted because a launch with no verdict must not take away a licence the player
+    /// holds; `AppModel.apply(_:)` is the one place that sets it from a launch decision.
+    private(set) var licenceGate = LicenceGate.permitted
+
+    /// How many notes the gate turned away, so a probe or a diagnostic can see that the
+    /// gate refused instead of having to infer it from silence.
+    private(set) var refusedNotes = 0
+
     var activeVoices: Int {
         keysound?.voiceCount ?? 0
     }
@@ -50,6 +62,13 @@ final class AudioEngineController {
 
     var patchLayers: [KeyLayer] {
         currentPatch.layers
+    }
+
+    /// Publishes the playback decision. Producer side, like `setPatch`: nothing on the
+    /// graph is rebuilt, and a refusal takes effect on the next note rather than cutting the
+    /// chord already sounding.
+    func setLicenceGate(_ gate: LicenceGate) {
+        licenceGate = gate
     }
 
     /// Starts the graph, or throws `AudioStartFailure` saying why it could not.
@@ -96,7 +115,6 @@ final class AudioEngineController {
             }
 
             keysound.render(into: head, frameCount: frames)
-
             var channel = 1
             while channel < buffers.count {
                 if let data = buffers[channel].mData?.assumingMemoryBound(to: Float.self) {
@@ -107,7 +125,6 @@ final class AudioEngineController {
 
             return noErr
         }
-
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: format)
         engine.prepare()
@@ -155,7 +172,17 @@ final class AudioEngineController {
         keysound?.setMetronome(settings)
     }
 
+    /// The one place a voice can start.
+    ///
+    /// The gate is checked before the engine is touched, so a refused note costs nothing and
+    /// the count records that a request arrived and was turned away rather than never made.
+    /// A refusal does not stop the click or the engine: the app keeps running with the
+    /// licensed sound set withheld, which is the downgrade the analysis documents.
     func noteOn(note: UInt8, velocity: UInt8) {
+        guard licenceGate.permitsPlayback else {
+            refusedNotes += 1
+            return
+        }
         keysound?.noteOn(note: note, velocity: velocity)
     }
 
