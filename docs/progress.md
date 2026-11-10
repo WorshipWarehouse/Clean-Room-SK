@@ -18,13 +18,14 @@ this file tracks state.
 | Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
 | Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4, run `42729742825` |
 | Build, bundle | `SundayKeys.app` assembled from the release build, ad-hoc signed, plist and signature verified | `tools/bundle_app.sh`, run `42730684997` |
+| Launch, CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, and sees the app exit 0 through `NSApplication.terminate` | `tools/launch_smoke.sh`, `Sources/SundayKeysApp/LaunchProbe.swift`, run `42731763842` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
-controller layout, a playable set list and a bundle that CI assembles and verifies, not a finished
-product. What is still missing is everything that needs to be seen and heard: the bundle has never
-been launched, and no audio device, controller or native window has been exercised, because the Mac
-that would do it is unreachable.
+controller layout, a playable set list and a bundle that CI assembles, verifies and now launches, not
+a finished product. What is still missing is everything that needs eyes and ears: no person has seen
+the window, no output device has been driven, no controller has been plugged in and nothing has been
+listened to, because the Mac that would do it is unreachable.
 
 ## Audio milestone: what the instrument actually is
 
@@ -252,10 +253,56 @@ build and verifies its own output.
   the executable, plist and signature checks and lists the bundle's files, so a red run says which
   check failed. Run `42730684997` is the first to include the step and it passed.
 
-What this does not cover, and the script says so at the top: nobody has opened `SundayKeys.app`. The
-window, the AVAudioEngine start path against a real output device, CoreMIDI against a controller and
-the set list panel on screen are all still unverified, and a bundle that assembles and signs is not
-the same thing as an app that runs.
+## Launch milestone: the bundle starts
+
+A bundle that assembles is not an app that runs, and until run `42731763842` nobody and no machine had
+started this one. Two marks are needed to say anything honest about a launch: that the app reached its
+run loop, and that it left through a normal exit rather than a signal.
+
+- **The app reports its own startup.** `Sources/SundayKeysApp/LaunchProbe.swift` prints
+  `SundayKeysApp: did finish launching pid=…` from `applicationDidFinishLaunching` and
+  `SundayKeysApp: root view appeared pid=…` from the root view's `onAppear`, once. A live PID proves
+  only that the loader resolved symbols; these two lines are the observable points where AppKit has
+  finished launching and SwiftUI has installed the view hierarchy.
+- **The probe exit is a real quit.** With `SUNDAYKEYS_PROBE_EXIT_AFTER=<seconds>` the app schedules a
+  one-shot timer that calls `NSApp.terminate(nil)`. A timer that fires is evidence the run loop is
+  being serviced, and the resulting status 0 is a normal exit. Without the variable nothing changes,
+  so a player launching the app never sees probe behaviour.
+- **The check probes the session before it blames the app.** `tools/launch_smoke.sh` prints the OS
+  version, `launchctl managername`, whether `WindowServer` is running, whether `gui/<uid>` is
+  reachable and whether the job is over SSH, then launches the bundle's own executable with the probe
+  armed and a 20 second budget for the two markers.
+- **It fails on the four real failures.** A dead process, a missing marker, a process still running
+  after the probe asked it to quit, and a non-zero exit each fail the step and print the last 120
+  lines of the app's own output as an annotation, so a red run names the obstacle instead of hiding
+  it. A zombie is not mistaken for a hang: liveness is read from `ps -o state=`, because an exited
+  child still answers `kill -0` until it is reaped.
+- **LaunchServices is supplementary, never the pass.** The script also runs `open -n` on the bundle
+  and reports whether a process appeared and stayed alive, then terminates it. That path cannot carry
+  the probe environment or be captured on stdout, and it ends in a signal rather than a clean exit, so
+  it is evidence and not the criterion.
+- **Observed.** Run [`42731763842`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731763842)
+  on `7cb9a17`: the macos job succeeded, and its step 12, "Launch the app", passed in seven seconds
+  (00:55:17 to 00:55:24). Debug build with tests, all suites, warnings, the release build, the bundle
+  step, the launch step and the bootstrap smoke step all passed on that same run. The runner was
+  `macos-15-arm64` on macOS 15.8.2 with Xcode 16.4 and Swift 6.1.2 targeting arm64-apple-macosx15.0,
+  read from the job log. The only annotations were the macOS capacity notice and the SwiftPM manifest
+  warning; no compiler or test warning came from this change.
+
+What the step proves: the bundle's executable loads, AppKit finishes launching, SwiftUI installs the
+root view, the run loop services a timer, and the process exits with status 0 through
+`NSApplication.terminate`. Because the script only exits 0 after asserting those markers and that
+status, a green step means all of them held.
+
+What it does not prove: that a person can see a window, that the window is the right size or on
+screen, that audio reaches an output device, that a controller is seen, or that the audio graph and
+MIDI client start at all — the app only creates those when the player presses Start, and no launch
+check presses it. The job log for this run came back truncated before the launch step's own printed
+lines, so the session string and the LaunchServices result were not read in this session; the pass is
+reported from the step's status and the script's exit conditions, not from a quoted log line. No
+startup defect surfaced: the attempt found no crash on init, no force-unwrap failure, no missing
+resource and no audio or MIDI abort with no controller and no device started, so nothing needed
+repair for this milestone.
 
 ## Remote development: what CI actually does
 
@@ -275,16 +322,18 @@ group that supersedes an older run, and a 25-minute timeout. Its steps are:
 6. `swift build -c release`, which compiles the optimised configuration as well as the debug one;
 7. `tools/bundle_app.sh`, which assembles `SundayKeys.app`, signs it ad hoc and verifies the plist,
    the executable and the signature, then the workflow repeats those checks and lists the files;
-8. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
+8. `tools/launch_smoke.sh`, which starts the bundle, asserts the two startup markers and the probe
+   timer and requires a status 0 exit, so a crash, a hang or a signal is a red step;
+9. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
    present) or 1 (tools missing) or if it fails to report the toolchain, which is the smoke test for
    the script's reporting and exit codes.
 
 What that does not cover, and this log will not pretend otherwise: the install path of
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
-machine), notarisation and distribution signing, launching the bundle, `AVAudioEngine` against a
-real output device, CoreMIDI against a real controller, and anything that needs to be heard. The DSP
-is validated by offline tests that measure sample values, and neither the set list panel nor the
-bundle has ever been looked at on a screen: nobody has listened to this or clicked through it on this
+machine), notarisation and distribution signing, seeing the window, `AVAudioEngine` against a real
+output device, CoreMIDI against a real controller, and anything that needs to be heard. The DSP is
+validated by offline tests that measure sample values, and neither the set list panel nor the launched
+window has ever been looked at on a screen: nobody has listened to this or clicked through it on this
 hardware.
 
 ## Decompilation: awaiting external access
@@ -300,12 +349,13 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: audio device output, a
-   real controller, a click through the patch, set list, effects and mapping panels, and a listen to
-   the effects chain. This is the only step that needs the App Store Xcode and a person listening.
-2. An unattended launch smoke check in CI: start the bundle, wait for the process to stay alive, then
-   quit it, so a crash on launch is caught by the runner instead of by the player. The runner has a
-   window server, so this should be possible without the Mac, and it is the next thing to try.
+1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, start the
+   engine against a real output device, plug in a controller, click through the patch, set list,
+   effects and mapping panels, and listen to the effects chain. This is the only step that needs the
+   App Store Xcode and a person listening.
+2. A launch check for the audio path: with an environment variable, press Start from the probe, report
+   the sample rate the engine came up at or the error it threw, and exit. That would turn "no output
+   device" from a silent status message into an observed result on a runner.
 3. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
    behaviour of a controller that sends on several channels.
 4. Session scope beyond one ordered list, once there is evidence for it: the original app's session
@@ -343,7 +393,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `9c6768d` | [42728534122](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728534122) | failure, two tests of the new suite, eleven annotations, and both were assertions rather than the model: `testASlotWhosePatchIsMissingIsSkippedWhileStepping` expected the head at index 1 after stepping over the dangling middle slot, but a skipped slot is not removed, so the head is on index 2 of three; `testSteppingToAWetterPatchAppliesItsEffects` demanded an empty voice pool after 20 blocks, which is 10,240 frames of the 10,560-frame release. Fixed in `18e0268`. |
 | `18e0268` | [42729742825](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42729742825) | success: the debug build, all test suites including the set list ordering, persistence and set-list switching tests, the release build and the bootstrap smoke step. |
 | `a1a5e61` | [42730136694](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730136694) | success: the set list write-up, with no code change; build, tests, release build and the bootstrap smoke step. |
-| `3e0c3a9` | [42730684997](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) | success: build, all suites, the release build, the new bundle step and the bootstrap smoke step. The bundle step ran the script and passed its plist, executable and strict signature checks. The two annotations are the macOS queue notice and the SwiftPM manifest warning, not code warnings. |
+| `3e0c3a9` | [42730684997](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) | success: build, all suites, the release build, the bundle step and the bootstrap smoke step. The bundle step ran the script and passed its plist, executable and strict signature checks. |
+| `7cb9a17` | [42731763842](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42731763842) | success: build, all suites, warnings, release build, bundle step, the new launch step and the bootstrap smoke step. The launch step passed in seven seconds, which by the script's own exit conditions means both startup markers were found, the probe timer fired and the app exited 0. Annotations: the macOS capacity notice and the SwiftPM manifest warning. |
 
 ## Coverage that remains
 
@@ -357,8 +408,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the original app's MIDI CC assignments | not decompiled | awaiting external access; this implementation's default layout is its own design and can be relearned |
 | the original app's session and set-list contents | not decompiled and not captured | a capture or a decompiled session type; the type here reproduces the behaviour, not the file layout |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
-| launching the bundle, audio device output, a real controller, a clicked-through window | need the unreachable Mac | next action 1 |
-| an unattended launch smoke check | not written yet; needs a runner with a window server | next action 2 |
+| seeing the window, hearing an output device, using a real controller | need the unreachable Mac | next action 1 |
+| the audio graph and the MIDI client starting | only happen when the player presses Start, and no launch check presses it | next action 2, on a runner, or next action 1 on the Mac |
+| whether the LaunchServices double-click path quits gracefully | `open` cannot carry the probe and the check quits it by signal | next action 1, where a person quits the app |
 
 ## Decisions recorded
 
@@ -397,6 +449,11 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the bundle carries its own identifier and version | the original is `com.sundaysounds.sundaykeys` 2.5.2 build 3367; reusing that identity would be false and would collide, so this is 0.5.0 build 5 of its own line and the two can be installed side by side |
 | the bundle is signed ad hoc, not for distribution | Apple silicon will not launch an unsigned bundle and there is no developer certificate here; ad-hoc signing is enough to launch locally and nothing is notarised, which the script states |
 | the bundler verifies its own output | a bundle that assembles is not a bundle that is well formed, so the script lints the plist, checks the executable, verifies the signature and fails the run if any check does |
+| the app prints its own startup markers | a live PID only proves symbol resolution; AppKit finishing launch and the SwiftUI root view appearing are the points that can be asserted, and they cost one print each |
+| the probe exits through `NSApplication.terminate` | a signal's status 143 says nothing about the run loop, while a fired timer plus status 0 proves the loop is serviced and the exit is normal |
+| a launch that cannot happen fails the step instead of warning | an unproven launch must not look green; the script prints the session it found and the app's own output so a red step names the obstacle |
+| LaunchServices is evidence, not the pass condition | `open` cannot carry the probe environment or be captured, and it can only be stopped by signal, so a clean exit could not be shown there |
+| liveness is read from the process state, not `kill -0` | an exited child answers `kill -0` until it is reaped, so a finished app would be misreported as a hang |
 
 ## Commit trail
 
@@ -436,5 +493,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `18e0268` | the two set list assertions repaired, verified by run `42729742825` |
 | `a1a5e61` | the observed run table and the README updated; verified by run `42730136694` |
 | `3e0c3a9` | `tools/bundle_app.sh`, the CI bundle step and `build/` ignored; verified by run `42730684997` |
+| `27b1999` | the bundle milestone in this log and the README; superseded by the next push before its run reported |
+| `98e5a41` | README rows for the bundle; verified by run `42731121652` |
+| `7cb9a17` | `LaunchProbe`, `tools/launch_smoke.sh` and the CI launch step; verified by run `42731763842` |
 
 Earlier analysis commits are listed in the analysis document itself.
