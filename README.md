@@ -15,7 +15,9 @@ Nothing here is produced by executing the original app, and no original source w
 | app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence, an original EQ/chorus/delay/reverb chain per patch, a learned per-patch controller layout, and an ordered set list with a play head |
 | bundled app | `tools/bundle_app.sh` assembles and ad-hoc signs `SundayKeys.app`; CI lints the plist and verifies the signature on every push |
 | launched in CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, watches the run loop service a timer, and sees a status 0 exit; no person has seen the window |
-| not yet verified on hardware | no audio device has been driven, no controller connected, nothing listened to |
+| audio started in CI | the runner presses Start from inside the app, the graph opens on its default output device, plays a note and the render block reports a rendered voice; a machine with no output device is a typed error rather than a crash |
+| MIDI started in CI | the runner creates a CoreMIDI client and an input port from inside the app and enumerates the source list; that runner has no source, and the step says so instead of hiding it |
+| not yet verified on hardware | no controller has ever been connected, nothing has been listened to, and no person has seen the window |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -35,12 +37,18 @@ dispatch references over 2,527 descriptors.
 | `Sources/CSync/` | atomic index loads and stores for the audio queue and the effects settings seqlock |
 | `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument, patch model and bank store, controller mapping, set list |
 | `Sources/SundayKeysCore/Audio/Effects/` | EQ, chorus, delay and reverb processors and the chain that publishes their settings |
+| `Sources/SundayKeysCore/Audio/AudioStartPlan.swift` | the start decision: rate accepted, rate replaced, or a typed refusal |
+| `Sources/SundayKeysCore/MIDI/MIDIStartReport.swift` | the MIDI start report, its failures and the exit status that names which part failed |
 | `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker, set list panel, layer editor, effects panel, controller mapping panel, CoreMIDI input, AVAudioEngine host |
-| `Sources/SundayKeysApp/LaunchProbe.swift` | startup markers and the self-quit timer the launch check reads |
+| `Sources/SundayKeysApp/LaunchProbe.swift` | startup markers and the self-quit timer the launch check reads, plus the audio and MIDI probes |
+| `Sources/SundayKeysApp/Audio/DefaultOutputDevice.swift` | asks CoreAudio whether an output device exists before the graph touches it |
+| `Sources/SundayKeysApp/MIDI/MIDIEndpointReader.swift` | reads CoreMIDI's sources into the core's descriptions |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
-| `.github/workflows/build.yml` | resolve, build, test, release build, bundle, launch and bootstrap smoke check on a macOS runner |
+| `.github/workflows/build.yml` | resolve, build, test, release build, bundle, launch, audio, MIDI and bootstrap smoke checks on a macOS runner |
 | `tools/bundle_app.sh` | assembles, signs and verifies `SundayKeys.app` from the release build |
 | `tools/launch_smoke.sh` | starts the bundle, asserts its startup markers and a clean exit, and fails with the captured output otherwise |
+| `tools/audio_smoke.sh` | presses Start inside the app, requires a rendered voice and a clean exit, and reports a missing output device as a limitation |
+| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, requires the client marker and a source count, and reports a machine with no source as a limitation |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
 
 ## Build and run the app
@@ -50,18 +58,20 @@ swift build          # library and app target
 swift test           # core tests
 tools/bundle_app.sh  # release build, then build/SundayKeys.app
 tools/launch_smoke.sh  # start it, prove it reached its run loop, prove it exited 0
+tools/audio_smoke.sh   # press Start from inside it, prove the render block made a voice
+tools/midi_smoke.sh    # create the MIDI client and port, prove the source list was read
 open build/SundayKeys.app
 ```
 
 The same commands run on a macOS runner for every push, and the check run on a commit carries the
-result: the workflow also resolves the manifest, reports unique compiler warnings, builds the release
-configuration, runs the bundler and verifies its output, launches the bundle, and runs
-`bash tools/bootstrap.sh --check` as a smoke test. There is no Xcode project: the package builds the
-app target and the bundler wraps it into an `.app` with its own identifier
-(`com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0) and an ad-hoc signature, so it can be
-launched on Apple silicon without a developer certificate. That signature is not distribution signing
-and nothing is notarised. The install path of the bootstrap script is not exercised anywhere, because
-it installs Homebrew casks and needs sudo.
+result: the workflow resolves the manifest, reports unique compiler warnings, builds the release
+configuration, runs the bundler and verifies its output, launches the bundle, presses Start for audio,
+presses Start for MIDI, and runs `bash tools/bootstrap.sh --check` as a smoke test.
+There is no Xcode project: the package builds the app target and the bundler wraps it into an `.app`
+with its own identifier (`com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0) and an ad-hoc
+signature, so it can be launched on Apple silicon without a developer certificate. That signature is
+not distribution signing and nothing is notarised. The install path of the bootstrap script is not
+exercised anywhere, because it installs Homebrew casks and needs sudo.
 
 To run it by hand once a Mac is available: `tools/bundle_app.sh`, then `open build/SundayKeys.app`,
 press Start, and play the on-screen keyboard or a connected controller. `swift run SundayKeysApp`
@@ -223,10 +233,72 @@ Run [`42731763842`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/ru
 the script only exits 0 after asserting the markers, the timer and the exit status, that green step
 means the bundle loaded, AppKit finished launching, the root view was installed, the run loop serviced
 a timer and the app exited 0 on a runner with no controller attached and nothing pressed.
-
 What it does not show: a window nobody has looked at, audio from an output device, a controller, or
-the audio graph and MIDI client starting — those are created when Start is pressed, and no launch
-check presses it. Nothing here has been listened to.
+the audio graph and MIDI client starting - those are created when Start is pressed, which this check
+does not do. The audio and MIDI checks below are the steps that press it. Nothing here has been
+listened to.
+
+## Pressing Start: the audio graph
+
+The launch check ends where playback starts, so the workflow presses Start itself and reports what
+happened. `SUNDAYKEYS_PROBE_START_ENGINE=1` runs the same `AudioEngineController.start()` the button
+runs, plays note 69, waits half a second, prints the rate and the voice count the render block
+produced, stops the graph and exits.
+
+- **A device is checked for before the graph touches it.** Reading `engine.outputNode` with no output
+device raises an Objective-C exception Swift cannot catch, so `DefaultOutputDevice.exists()` asks
+  CoreAudio for `kAudioHardwarePropertyDefaultOutputDevice` first and a missing device becomes a typed
+  failure the app can show.
+- **The decision is core logic.** `AudioStartPlanner.plan(forReportedSampleRate:)` keeps a reported
+  rate, replaces the zero macOS reports before the engine runs with 48 kHz, refuses a negative or
+  non-finite rate as `unsupportedFormat`, and refuses a missing device as `noOutputDevice`. The plan
+  is always stereo. A rejection carrying a NaN rate compares by bit pattern, because NaN is never
+  equal to itself.
+- **A voice is the proof.** A voice only exists once the audio callback has drained the command ring,
+  so a non-zero count says the render thread ran, not merely that the engine opened.
+- **The exit status is the verdict**: 0 started and rendered, 4 refused to start, 5 started but
+  produced no voice, 6 lost the graph. `tools/audio_smoke.sh` reads those and the markers.
+- **A machine with no output device is reported, not hidden.** If the app prints the typed
+  `No audio output device is available` failure and exits 4, the script publishes a warning annotation
+  with that line and still exits 0, because refusing cleanly is right there and the run should record
+  what the hardware was. Any other failure fails the step with the app's own output.
+
+Run [`42733100695`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733100695) on
+`e6ae994` is the first green audio step: every step passed and the job published no warning
+annotation, and the no-device path always publishes one, so the graph started and rendered at least
+one voice on the runner's default output device. The printed rate and voice count are not quoted here
+because the job log download truncates before the later steps; the pass is reported from the step's
+status and the script's exit conditions. The first attempt, run `42732896895`, failed on my own NaN
+equality and a `@Sendable` capture in the probe, both fixed in `e6ae994` rather than tested around.
+
+## Pressing Start: the MIDI client
+
+`MIDIInputService.start()` used to create the client and the input port and throw away every
+`OSStatus`, so a client that could not be created and a machine with no controller looked identical:
+an empty source list and no explanation. It now returns a verdict, and the workflow asks for it.
+
+- **The verdict is core logic.** `MIDIStartReport.swift` holds the source description, the inventory,
+  the failure and the verdict. A source with no name, a blank name or no manufacturer still gets a
+  distinct line (its unique id and "unknown manufacturer" stand in), each line carries its position
+  and count, and the summary is `MIDI: N source(s): X online, Y offline`.
+- **Only online endpoints are connected.** An offline endpoint is listed and counted but not
+  connected, because a refused connect there says nothing about the machine; a connect that fails on
+  an online source is reported with its name and status.
+- **The exit status is the verdict**: 0 the client and port were created and every online source
+  connected - a zero-source list is still 0, since that is a fact about the hardware - 4 no client,
+  5 no input port, 6 a source that would not connect.
+- **A machine with no controller is reported, not hidden.** `tools/midi_smoke.sh` publishes a warning
+  annotation with the app's own line and exits 0 when the count is zero, and fails the step on a
+  missing client marker, a missing count, a non-zero status or a timeout.
+
+Run [`42734422204`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42734422204) on
+`2464172` is the first green MIDI step: all fifteen steps passed and "Probe the MIDI start" took two
+seconds. The job published the probe's own warning, "this machine has no MIDI sources: the probe
+proved the client and input port were created and the source list was empty", and the script only
+reaches that line after finding the client marker, reading a source count and seeing exit 0. So a
+CoreMIDI client and input port were created on the runner and `MIDIGetNumberOfSources` returned zero.
+The connect path was not exercised, because there was nothing to connect: that is what a controller
+attached to a real Mac is for, and it has not happened.
 
 ## Reproduce the analysis
 
@@ -280,11 +352,14 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
   semantics, MIDI CC mappings, session contents, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- The bundle is assembled, signed, checked and started on the runner, but no person has seen its
-  window: no audio device has been driven, no controller connected, no menu used, and nothing has
-  been listened to. No local build has been run; every result comes from the macOS runner.
+- The bundle is assembled, signed, checked, started and given an audio graph and a MIDI client on the
+  runner, but no person has seen its window: nothing has been listened to, no controller has been
+  connected, and the MIDI connect path has never run against a real source. No local build has been
+  run; every result comes from the macOS runner.
 - The set list panel, the effects panel and the controller panel have never been looked at on a
   screen.
+- `AppModel.start()` discards the MIDI start verdict, so a client that cannot be created is still
+  silent in the window; the service returns it and nothing shows it.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
   independently licensed or recorded material.
 
