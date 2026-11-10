@@ -72,6 +72,18 @@ jobs:
           set -o pipefail
           swift build -c release
 
+      # The bundler builds, assembles and verifies its own output. Repeating the
+      # two cheapest checks here keeps a failure attributable to the workflow.
+      - name: Bundle the app
+        if: success()
+        run: |
+          set -o pipefail
+          bash tools/bundle_app.sh 2>&1 | tee /tmp/bundle.log
+          test -x build/SundayKeys.app/Contents/MacOS/SundayKeysApp
+          plutil -lint build/SundayKeys.app/Contents/Info.plist
+          codesign --verify --strict build/SundayKeys.app
+          find build/SundayKeys.app -type f | sort
+
       # The bootstrap script documents the toolchain this package needs. Only its
       # --check path can run unattended: the install path would need Homebrew
       # casks and sudo, so it is left to the developer machine.
