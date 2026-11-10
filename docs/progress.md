@@ -872,7 +872,7 @@ and it is now closed.
   patch keeps its identity, and that importing the same document twice yields `Twice`
   and `Twice 2`.
 
-**Observed.** Run [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) on `59a5cdc`: the build job concluded success
+**Observed.** Run [42829541319](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541319) on `59a5cdc`: the build job concluded success
 with every step green. `Build (debug, with tests)` 13:59:09 to 13:59:29 compiled the new
 core file and the new suite, `Test` 13:59:29 to 13:59:32 ran every suite including the
 twelve cases, `Build (release)` 13:59:32 to 13:59:50 followed, `Launch the app` 13:59:52
@@ -966,7 +966,13 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `59a5cdc` | [42829541318](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541318) | failure: `Probe the patch transfer` 13:59:43 to 14:00:05, because the probe was pushed before the call site that runs it existed. Fixed in `271844d`, where the same probe step passed in run `42830474030`. |
 | `59a5cdc` | [42829541147](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541147) | success: the click workflow, still green with the new core file. `Probe the click` 13:59:40 to 13:59:46, job completed 13:59:47. |
 | `59a5cdc` | [42829541256](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42829541256) | success: the session resume probe on the same head. `Probe the session resume` 13:59:39 to 13:59:42, job completed 13:59:43. |
-| `271844d` | [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) | the wiring and this write-up: `PatchTransferSection`, the model's export and import, the probe's call site, and the probe itself passing on the runner before either commit was pushed. |
+| `271844d` | [42830474030](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830474030) | the wiring commit: `PatchTransferSection`, the model's export and import, the probe's call site, and the probe itself passing on the runner before either commit was pushed. |
+| `dd5ebdef` | [42830844094](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830844094) | success: the final head. Debug build with tests 14:07:14 to 14:07:39, warnings at 14:07:39, `Test` 14:07:39 to 14:07:42, release 14:07:42 to 14:08:05, bundle 14:08:05 to 14:08:08, launch 14:08:08 to 14:08:16, audio probe 14:08:16 to 14:08:19, MIDI probe 14:08:19 to 14:08:21, bootstrap check 14:08:21 to 14:08:23, job completed 14:08:29. |
+| `dd5ebdef` | [42830843975](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830843975) | success: the click probe on the final head. Release 14:07:21 to 14:07:56, bundle 14:07:56 to 14:07:58, `Probe the click` 14:07:58 to 14:08:04, job completed 14:08:06. |
+| `dd5ebdef` | [42830844138](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830844138) | success: the session resume probe on the final head. Release 14:07:08 to 14:07:37, bundle 14:07:37 to 14:07:39, `Probe the session resume` 14:07:39 to 14:07:43, job completed 14:07:45. |
+| `dd5ebdef` | [42830846119](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42830846119) | success: the patch transfer probe on the final head, the step that failed in 42829541318. Release 14:07:06 to 14:07:32, bundle 14:07:32 to 14:07:34, `Probe the patch transfer` 14:07:34 to 14:07:36, job completed 14:07:38. |
+
+**What the final head's runs do not establish.** Every step above ran on a runner, not on a person's Mac: nobody has pressed `Export patch` or `Import patch` in a window, no patch file has crossed between two machines, and the document format is this implementation's own invention rather than the original app's preset format, which the analysis still records as **Unknown**.
 
 ## Coverage that remains
 
