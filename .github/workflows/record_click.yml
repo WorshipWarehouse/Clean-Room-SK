@@ -1,23 +1,20 @@
 name: record-click
 
-# One shot. It records the click milestone in docs/progress.md and README.md, puts the
-# click's controls in the window, and deletes itself in the same commit.
-#
-# It exists because the two files it patches are 94 KB and 32 KB: neither can be
-# replaced from memory through one API call without risking a transcription error, so
-# the patch is anchored and asserted here and the file text itself never leaves the
-# runner. Every run it cites is read back from the API and checked for a completed
-# success before a byte is committed, so a red run cannot be written up as green.
-#
+# One shot: patch the window and the docs, prove the patched tree still builds,
+# commit, delete itself. tools/record_click.py asserts every run it cites and every
+# anchor it patches, so a red run or a moved anchor fails the job instead of
+# writing a guess, and nothing is committed unless swift build passes first.
 on:
   workflow_dispatch:
     inputs:
       build_run_id:
         description: the build workflow run that proved the click
-        required: true
+        required: false
+        default: "42824933255"
       click_run_id:
         description: the click workflow run that probed it on the runner
-        required: true
+        required: false
+        default: "42824933210"
 
 permissions:
   contents: write
@@ -25,359 +22,31 @@ permissions:
 jobs:
   record:
     runs-on: macos-15
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
 
       - name: Record the milestone
         env:
-          BUILD_RUN_ID: ${{ inputs.build_run_id }}
-          CLICK_RUN_ID: ${{ inputs.click_run_id }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id || '42824933255' }}
+          CLICK_RUN_ID: ${{ inputs.click_run_id || '42824933210' }}
         run: |
           set -o pipefail
-          python3 - <<'PY'
-          import base64
-          import json
-          import os
-          import sys
-          import urllib.request
+          python3 tools/record_click.py
 
-          TOKEN = os.environ["GITHUB_TOKEN"]
-          REPO = os.environ["GITHUB_REPOSITORY"]
-          BUILD_ID = os.environ["BUILD_RUN_ID"]
-          CLICK_ID = os.environ["CLICK_RUN_ID"]
+      - name: Prove the patched tree builds
+        run: |
+          set -o pipefail
+          swift build 2>&1 | tee /tmp/patch_build.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            grep "error:" /tmp/patch_build.log | head -20 | tr -d '\r' | while IFS= read -r line; do
+              echo "::error::${line}"
+            done
+          fi
+          exit "$status"
 
-          def api(method, path, body=None):
-              data = None if body is None else json.dumps(body).encode()
-              request = urllib.request.Request("https://api.github.com" + path, data=data, method=method)
-              request.add_header("Authorization", "Bearer " + TOKEN)
-              request.add_header("Accept", "application/vnd.github+json")
-              request.add_header("X-GitHub-Api-Version", "2022-11-28")
-              if data is not None:
-                  request.add_header("Content-Type", "application/json")
-              with urllib.request.urlopen(request) as response:
-                  payload = response.read().decode()
-              return json.loads(payload) if payload.strip() else {}
-
-          def stop(message):
-              print("recorder: " + message)
-              sys.exit(1)
-
-          def clock(stamp):
-              return stamp[11:19]
-
-          def step_of(job, name):
-              for step in job["steps"]:
-                  if step["name"] == name:
-                      return step
-              stop("the job has no step named " + name)
-
-          build = api("GET", "/repos/%s/actions/runs/%s" % (REPO, BUILD_ID))
-          click = api("GET", "/repos/%s/actions/runs/%s" % (REPO, CLICK_ID))
-
-          for label, run in (("build", build), ("click", click)):
-              if run.get("status") != "completed":
-                  stop("%s run %s is still %s" % (label, run.get("id"), run.get("status")))
-              if run.get("conclusion") != "success":
-                  stop("%s run %s concluded %s" % (label, run.get("id"), run.get("conclusion")))
-          if build["head_sha"] != click["head_sha"]:
-              stop("the two runs are on different commits")
-
-          head_sha = build["head_sha"]
-          short = head_sha[:8]
-          build_job = api("GET", "/repos/%s/actions/runs/%s/jobs" % (REPO, BUILD_ID))["jobs"][0]
-          click_job = api("GET", "/repos/%s/actions/runs/%s/jobs" % (REPO, CLICK_ID))["jobs"][0]
-          if build_job.get("conclusion") != "success" or click_job.get("conclusion") != "success":
-              stop("a job did not conclude success")
-
-          debug = step_of(build_job, "Build (debug, with tests)")
-          tests = step_of(build_job, "Test")
-          release = step_of(build_job, "Build (release)")
-          launch = step_of(build_job, "Launch the app")
-          probe = step_of(click_job, "Probe the click")
-          for label, step in (
-              ("Build (debug, with tests)", debug),
-              ("Test", tests),
-              ("Build (release)", release),
-              ("Launch the app", launch),
-              ("Probe the click", probe),
-          ):
-              if step.get("conclusion") != "success":
-                  stop("%s concluded %s" % (label, step.get("conclusion")))
-
-          def read(path):
-              blob = api("GET", "/repos/%s/contents/%s?ref=%s" % (REPO, path, head_sha))
-              return base64.b64decode(blob["content"]).decode()
-
-          def insert_after(text, anchor, addition, label):
-              if text.count(anchor) != 1:
-                  stop("%s: the anchor appears %d times" % (label, text.count(anchor)))
-              return text.replace(anchor, anchor + addition)
-
-          def insert_before(text, anchor, addition, label):
-              if text.count(anchor) != 1:
-                  stop("%s: the anchor appears %d times" % (label, text.count(anchor)))
-              return text.replace(anchor, addition + anchor)
-
-          def insert_after_line(text, needle, addition, label):
-              lines = text.split("\n")
-              hits = [index for index, line in enumerate(lines) if needle in line]
-              if len(hits) != 1:
-                  stop("%s: the needle appears on %d lines" % (label, len(hits)))
-              lines.insert(hits[0] + 1, addition)
-              return "\n".join(lines)
-
-          url_build = "https://github.com/%s/actions/runs/%s" % (REPO, BUILD_ID)
-          url_click = "https://github.com/%s/actions/runs/%s" % (REPO, CLICK_ID)
-
-          milestone = (
-              "## Click milestone: a pulse the render thread keeps\n"
-              "\n"
-              "The instrument could play a chord but had no pulse: every tempo thought in this\n"
-              "repository ended at \"tempo authority: Unknown\", and the next action list was all\n"
-              "hardware. A player rehearsing without a click has to keep the time themselves, so a\n"
-              "tempo clock was the next thing that could be built and proved without a controller,\n"
-              "a window or the unreachable Mac.\n"
-              "\n"
-              "- **The clock is core logic.** `Metronome` turns bpm into frames at the graph's own\n"
-              "  sample rate and starts a click on the frame a beat is due, so a beat is not a timer\n"
-              "  callback. At 120 bpm and 48 kHz the tests find onsets at frames 0, 24000, 48000,\n"
-              "  72000 and 96000 exactly, and the downbeat is at twice the level of the beats inside\n"
-              "  the bar.\n"
-              "- **Settings cross without a lock.** The whole settings value is published through a\n"
-              "  seqlock over two `UInt64`s using the CSync atomics, the arrangement the effects chain\n"
-              "  already uses: a torn read is discarded and the previous settings stand for one more\n"
-              "  block, so switching the click on cannot make the render block lock or allocate.\n"
-              "- **A tempo change does not move the beat already on its way.** The beat that was due\n"
-              "  still lands and the interval after it uses the new tempo, which the tests show by\n"
-              "  turning 120 into 60 bpm on the second beat and finding the third at frame 72000\n"
-              "  instead of 48000.\n"
-              "- **Switching it off is a stop, not a cut.** The click in flight is allowed to finish\n"
-              "  its 45 ms envelope and nothing is scheduled after it, so the tests find one onset and\n"
-              "  then exact silence, and the probe waits past the next beat to prove no click arrived.\n"
-              "- **The cue is not part of the patch.** The engine adds the click after the effect chain,\n"
-              "  so a patch's delay and reverb never echo it, and it never borrows a voice: a note held\n"
-              "  across a click stays one voice.\n"
-              "- **Ten cases measure it.** `Tests/SundayKeysCoreTests/MetronomeTests.swift` renders\n"
-              "  frames and asserts where the sound is: the beat grid, both accents, a bar of three, a\n"
-              "  silent clock, the tempo change, the stop, the clamps, the bypass and the voice count.\n"
-              "\n"
-              "**Observed.** Run [`%s`](%s) on `%s`: the build job concluded success.\n"
-              "\n"
-              "- `Build (debug, with tests)`: success %s to %s UTC, which compiled `Metronome.swift`,\n"
-              "  the engine change and `MetronomeTests.swift`.\n"
-              "- `Test`: success %s to %s UTC, which ran every suite including the ten click cases.\n"
-              "- `Build (release)`: success %s to %s UTC, and `Launch the app`: success %s to %s UTC.\n"
-              "- `Probe the click` is not a build step: run [`%s`](%s) is the click workflow on the\n"
-              "  same commit, and its `Probe the click` step was success %s to %s UTC. That step only\n"
-              "  passes after the app prints the click on, at least two beats counted and none after\n"
-              "  the stop, so it is the running graph rendering the cue rather than a compile.\n"
-              "\n"
-              "What this does not prove: that a person has heard it. The probe counts the beats the\n"
-              "render thread started on the runner's output device; nobody has listened to a click,\n"
-              "and no window has been looked at.\n"
-              "\n"
-          ) % (
-              BUILD_ID, url_build, short,
-              clock(debug["started_at"]), clock(debug["completed_at"]),
-              clock(tests["started_at"]), clock(tests["completed_at"]),
-              clock(release["started_at"]), clock(release["completed_at"]),
-              clock(launch["started_at"]), clock(launch["completed_at"]),
-              CLICK_ID, url_click,
-              clock(probe["started_at"]), clock(probe["completed_at"]),
-          )
-
-          progress = read("docs/progress.md")
-          progress = insert_before(progress, "## Next actions, in order", milestone, "progress milestone")
-          progress = insert_after_line(
-              progress,
-              "`tools/session_smoke.sh`, runs `42821991600` and `42821991761` |",
-              "| Build, click | a tempo clock and the click the render thread adds after the patch's effects, so a cue is never reverberated and no voice is borrowed | `Sources/SundayKeysCore/Audio/Metronome.swift`, runs `%s` and `%s` |" % (BUILD_ID, CLICK_ID),
-              "progress phase row",
-          )
-
-          readme = read("README.md")
-          readme = insert_after_line(
-              readme,
-              "| relaunch proven on disk |",
-              "| tempo and click | a sample-accurate click the render thread generates from a tempo clock: downbeats accented, a tempo change taking effect on the next beat, the click added after the patch's effects so nothing echoes it, and switching it off letting the click in flight finish |",
-              "readme status row",
-          )
-          readme = insert_before(readme, "## Session scope", (
-              "## Tempo and the click\n"
-              "\n"
-              "A player rehearsing needs a pulse, and the instrument had none. The click is a tempo\n"
-              "clock in the core module plus a short synthesised click, and the render thread adds it\n"
-              "to the buffer itself.\n"
-              "\n"
-              "- `MetronomeSettings` clamps the tempo to 20 to 300 bpm and the bar to 1 to 16 beats,\n"
-              "  and a non-finite tempo falls back to 120 rather than to a bound, because NaN says\n"
-              "  nothing about what the player meant.\n"
-              "- the settings cross to the render thread through a seqlock over two `UInt64`s using the\n"
-              "  `CSync` atomics, the arrangement the effects chain uses, so switching the click on\n"
-              "  never makes the render block lock or allocate.\n"
-              "- the click starts on the frame a beat is due, not near it: at 120 bpm and 48 kHz the\n"
-              "  tests find beats at frames 0, 24000, 48000, 72000 and 96000 exactly, with the downbeat\n"
-              "  at twice the level of the beats inside the bar and every third beat accented in 3/4.\n"
-              "- a tempo change does not move the beat already on its way; the interval after it uses\n"
-              "  the new tempo, so 120 to 60 bpm turns a 24000-frame beat into a 48000-frame one.\n"
-              "- switching the click off lets the click in flight ring out and schedules nothing more,\n"
-              "  which is why the tests find one onset and exact silence after it.\n"
-              "- the click is added after the patch's effect chain, so a patch's delay and reverb never\n"
-              "  echo the cue, and it never borrows a voice from the instrument.\n"
-              "\n"
-              "`Tests/SundayKeysCoreTests/MetronomeTests.swift` measures all of that by rendering\n"
-              "frames, and `tools/metronome_smoke.sh` covers the step the tests cannot reach: the\n"
-              "running app's own graph playing the cue. Run [`%s`](%s) starts the bundle, switches the\n"
-              "click on at 120 bpm, counts the beats the render thread started and finds none after it\n"
-              "was switched off. The control is in the transport row, and nobody has heard it.\n"
-              "\n"
-          ) % (CLICK_ID, url_click), "readme section")
-
-          appmodel = read("Sources/SundayKeysApp/AppModel.swift")
-          appmodel = insert_after(
-              appmodel,
-              "    @Published private(set) var heldNotes: Set<UInt8> = []",
-              "\n\n    /// The click is a cue for the whole app rather than part of a patch, so it lives\n"
-              "    /// here and is never written into the bank: a rehearsal tempo should not travel\n"
-              "    /// with a sound.\n"
-              "    @Published private(set) var click = MetronomeSettings()\n"
-              "    @Published private(set) var clickStatus = \"Click off\"\n"
-              "    @Published private(set) var clickCount = 0",
-              "appmodel properties",
-          )
-          appmodel = insert_before(
-              appmodel,
-              "    // MARK: - Patches",
-              "    // MARK: - Click\n"
-              "\n"
-              "    /// Switches the click without touching the patch, the bank or a single voice.\n"
-              "    func toggleClick() {\n"
-              "        setClick(enabled: !click.enabled)\n"
-              "    }\n"
-              "\n"
-              "    /// Moves one or more of the click's controls. The settings type clamps, so a stepper\n"
-              "    /// cannot put the tempo outside 20 to 300 bpm or the bar outside 1 to 16 beats.\n"
-              "    func setClick(enabled: Bool? = nil, beatsPerMinute: Double? = nil, beatsPerBar: Int? = nil) {\n"
-              "        click = MetronomeSettings(\n"
-              "            enabled: enabled ?? click.enabled,\n"
-              "            beatsPerMinute: beatsPerMinute ?? click.beatsPerMinute,\n"
-              "            beatsPerBar: beatsPerBar ?? click.beatsPerBar\n"
-              "        )\n"
-              "        audio.setMetronome(click)\n"
-              "        clickCount = 0\n"
-              "        clickStatus = click.enabled ? click.summary : \"Click off\"\n"
-              "    }\n"
-              "\n",
-              "appmodel click section",
-          )
-          appmodel = insert_after(
-              appmodel,
-              "        applyMIDIVerdict(midi.start())",
-              "\n        // A click switched on before Start is already what the graph should play.\n"
-              "        audio.setMetronome(click)",
-              "appmodel start",
-          )
-          appmodel = insert_after(
-              appmodel,
-              "                self.voiceCount = self.audio.activeVoices",
-              "\n                self.clickCount = self.audio.clickCount",
-              "appmodel meter",
-          )
-          appmodel = insert_before(
-              appmodel,
-              "        engineStatusLine = \"Engine stopped\"",
-              "        clickCount = 0\n",
-              "appmodel stop",
-          )
-
-          contentview = read("Sources/SundayKeysApp/ContentView.swift")
-          contentview = insert_after(
-              contentview,
-              "                    Button(\"All notes off\") { model.panic() }",
-              "\n\n                    ClickSection(model: model)",
-              "contentview transport",
-          )
-
-          clicksection = (
-              "import SwiftUI\n"
-              "import SundayKeysCore\n"
-              "\n"
-              "/// The click's controls, in the transport row because the click belongs to the\n"
-              "/// player's hands rather than to a patch. The count beside them is the number of beats\n"
-              "/// the render thread has actually started, refreshed by the model's meter, so the panel\n"
-              "/// reports what is sounding rather than what was asked for.\n"
-              "struct ClickSection: View {\n"
-              "    @ObservedObject var model: AppModel\n"
-              "\n"
-              "    var body: some View {\n"
-              "        HStack(spacing: 8) {\n"
-              "            Toggle(\n"
-              "                \"Click\",\n"
-              "                isOn: Binding(\n"
-              "                    get: { model.click.enabled },\n"
-              "                    set: { model.setClick(enabled: $0) }\n"
-              "                )\n"
-              "            )\n"
-              "            .toggleStyle(.checkbox)\n"
-              "\n"
-              "            Stepper(\n"
-              "                value: Binding(\n"
-              "                    get: { Int(model.click.beatsPerMinute.rounded()) },\n"
-              "                    set: { model.setClick(beatsPerMinute: Double($0)) }\n"
-              "                ),\n"
-              "                in: 20...300\n"
-              "            ) {\n"
-              "                Text(\"\\(Int(model.click.beatsPerMinute.rounded())) bpm\")\n"
-              "                    .font(.system(.caption, design: .monospaced))\n"
-              "                    .frame(width: 62, alignment: .leading)\n"
-              "            }\n"
-              "\n"
-              "            Stepper(\n"
-              "                value: Binding(\n"
-              "                    get: { model.click.beatsPerBar },\n"
-              "                    set: { model.setClick(beatsPerBar: $0) }\n"
-              "                ),\n"
-              "                in: 1...16\n"
-              "            ) {\n"
-              "                Text(\"\\(model.click.beatsPerBar)/4\")\n"
-              "                    .font(.system(.caption, design: .monospaced))\n"
-              "                    .frame(width: 34, alignment: .leading)\n"
-              "            }\n"
-              "\n"
-              "            Text(model.click.enabled ? model.clickStatus : \"Click off\")\n"
-              "                .font(.system(.caption, design: .monospaced))\n"
-              "                .foregroundStyle(model.click.enabled ? Color.orange : Color.secondary)\n"
-              "        }\n"
-              "        .disabled(!model.isEngineRunning)\n"
-              "    }\n"
-              "}\n"
-          )
-
-          head = api("GET", "/repos/%s/git/ref/heads/main" % REPO)["object"]["sha"]
-          if head != head_sha:
-              stop("main moved to %s since the runs were read" % head[:8])
-          base_tree = api("GET", "/repos/%s/git/commits/%s" % (REPO, head))["tree"]["sha"]
-
-          files = {
-              "docs/progress.md": progress,
-              "README.md": readme,
-              "Sources/SundayKeysApp/AppModel.swift": appmodel,
-              "Sources/SundayKeysApp/ContentView.swift": contentview,
-              "Sources/SundayKeysApp/ClickSection.swift": clicksection,
-          }
-          entries = []
-          for path, text in files.items():
-              blob = api("POST", "/repos/%s/git/blobs" % REPO, {"content": text, "encoding": "utf-8"})
-              entries.append({"path": path, "mode": "100644", "type": "blob", "sha": blob["sha"]})
-          entries.append({"path": ".github/workflows/record_click.yml", "mode": "100644", "type": "blob", "sha": None})
-
-          tree = api("POST", "/repos/%s/git/trees" % REPO, {"base_tree": base_tree, "tree": entries})
-          commit = api("POST", "/repos/%s/git/commits" % REPO, {
-              "message": "Record the click milestone and the runs that proved it\n\nRun %s is the build that ran the ten click cases and run %s is the click\nworkflow that played the cue on the runner's own output device." % (BUILD_ID, CLICK_ID),
-              "tree": tree["sha"],
-              "parents": [head],
-          })
-          api("PATCH", "/repos/%s/git/refs/heads/main" % REPO, {"sha": commit["sha"], "force": False})
-          print("recorder: wrote docs and the click control in " + commit["sha"])
-          PY
+      - name: Commit
+        run: |
+          set -o pipefail
+          python3 tools/commit_record.py
