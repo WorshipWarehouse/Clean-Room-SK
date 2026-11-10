@@ -15,6 +15,10 @@ extension AudioEngineController: KeysoundNoteTarget {}
 /// and division because those are the controls that decide what the pattern
 /// does, and every one of them takes the same path.
 ///
+/// The session row is the same path again: saving reads the panel's value and
+/// writing it back goes through the panel's own setters, so a restored session is
+/// indistinguishable from one the player dialled in by hand.
+///
 /// The analysis records the original's panel as **Unknown**, so the labels are
 /// this repository's own words rather than a copy of another layout, and the
 /// note under them says so in the window itself.
@@ -108,13 +112,21 @@ struct ArpeggiatorSection: View {
                     }
                     .labelsHidden()
                     .frame(width: 150)
-
                     Spacer()
                 }
 
                 Text(model.arpeggiatorStatus)
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    Button("Save session") { model.saveArpeggiatorSession() }
+                    Button("Restore session") { model.restoreArpeggiatorSession() }
+
+                    Text(model.arpeggiatorSessionStatus)
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
 
                 Text(
                     "Latch, the pattern and the octave span are this "

@@ -10,7 +10,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastEvent = "none"
     @Published private(set) var voiceCount = 0
     @Published private(set) var heldNotes: Set<UInt8> = []
-    ///
+
     /// The click is a cue for the whole app rather than part of a patch, so it lives
     /// here and is never written into the bank: a rehearsal tempo should not travel
     /// with a sound.
@@ -31,6 +31,11 @@ final class AppModel: ObservableObject {
     @Published private(set) var arpeggiatorDivision = StepDivision.eighth
     @Published private(set) var arpeggiatorStatus =
         "Arp off, latch off, Up, 1 octave, 120 bpm, eighth"
+
+    /// What the session buttons last did. The six choices above are the player's
+    /// session rather than part of a patch, so they are written to their own file when
+    /// the player asks and read back deliberately, never by every launch.
+    @Published private(set) var arpeggiatorSessionStatus = "Session not saved"
 
     /// What the MIDI client currently knows, updated on every start and on every
     /// refresh, so a source appearing or disappearing is reflected without
@@ -59,6 +64,13 @@ final class AppModel: ObservableObject {
     /// so the bank format does not move and an unreadable hint can never stop the
     /// bank from loading.
     private let sessionStore = SessionStore(url: SessionStore.defaultURL())
+    /// The arpeggiator session's own document, beside the bank and the launch memory.
+    /// It is a separate file for the same reason the launch memory is: the bank's
+    /// format does not move, and a session file that will not read cannot stop a
+    /// single patch from loading.
+    private let arpeggiatorSessionStore = ArpeggiatorSessionStore(
+        url: ArpeggiatorSessionStore.defaultURL()
+    )
     /// The arpeggiator's state and rules, behind the one panel the window binds
     /// to. Its notes leave through the same engine the keys do, so a stepped
     /// pattern would reach the voices a hand-played note reaches.
@@ -338,7 +350,8 @@ final class AppModel: ObservableObject {
     /// edge above the high edge still leaves a usable layer rather than muting it.
     func setLayerLower(_ layerID: UInt8, note: UInt8) {
         editLayer(layerID) {
-            $0.range = NoteRange(lower: note, upper: $0.range.upper) }
+            $0.range = NoteRange(lower: note, upper: $0.range.upper)
+        }
     }
 
     func setLayerUpper(_ layerID: UInt8, note: UInt8) {
@@ -429,6 +442,38 @@ final class AppModel: ObservableObject {
     func setArpeggiatorDivision(_ value: StepDivision) {
         arpeggiator.setDivision(value)
         publishArpeggiator()
+    }
+
+    /// Writes the panel's six choices to the session document beside the bank, so the
+    /// next launch can be put back where this one was. Reading the panel rather than
+    /// the mirrors is deliberate: the panel is the value the service holds, and the
+    /// mirrors are only its picture.
+    func saveArpeggiatorSession() {
+        do {
+            try arpeggiatorSessionStore.save(ArpeggiatorSession(panel: arpeggiator))
+            arpeggiatorSessionStatus = "Saved the arpeggiator session: \(arpeggiator.statusLine)"
+        } catch {
+            arpeggiatorSessionStatus = "Could not save the arpeggiator session: \(error)"
+        }
+    }
+
+    /// Reads the document back and puts it through the panel's own setters, the same
+    /// path a control takes, then republishes the mirrors so the window shows what the
+    /// service now holds. A file that will not read is named rather than ignored, and
+    /// the panel is left exactly as it was.
+    func restoreArpeggiatorSession() {
+        do {
+            guard let document = try arpeggiatorSessionStore.load() else {
+                arpeggiatorSessionStatus = "No arpeggiator session was saved"
+                return
+            }
+            document.apply(to: arpeggiator)
+            publishArpeggiator()
+            arpeggiatorSessionStatus =
+                "Restored the arpeggiator session: \(arpeggiator.statusLine)"
+        } catch {
+            arpeggiatorSessionStatus = "Could not restore the arpeggiator session: \(error)"
+        }
     }
 
     /// Copies the panel's state into the published mirrors. It reads the service
