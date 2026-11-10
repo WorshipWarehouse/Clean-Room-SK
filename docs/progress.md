@@ -17,12 +17,14 @@ this file tracks state.
 | Build, effects | EQ, chorus, delay and reverb after the voice mix, owned by the patch | `Sources/SundayKeysCore/Audio/Effects/`, run `42726206476` |
 | Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
 | Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4, run `42729742825` |
+| Build, bundle | `SundayKeys.app` assembled from the release build, ad-hoc signed, plist and signature verified | `tools/bundle_app.sh`, run `42730684997` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
-controller layout and a playable set list, not a finished product. Still missing: an `.app` bundle,
-and every hardware check that needs the Mac (audio device output, a real controller, a native
-launch).
+controller layout, a playable set list and a bundle that CI assembles and verifies, not a finished
+product. What is still missing is everything that needs to be seen and heard: the bundle has never
+been launched, and no audio device, controller or native window has been exercised, because the Mac
+that would do it is unreachable.
 
 ## Audio milestone: what the instrument actually is
 
@@ -227,6 +229,34 @@ actually played, so skipping a dangling middle slot lands on index 2 and not 1, 
 fading 20 blocks after a release that lasts 20.6 blocks. Both repairs are in `18e0268` and are
 recorded in the table below.
 
+## Bundle milestone: `SundayKeys.app`
+
+The package produced an executable but no bundle, so there was nothing to put in Applications, nothing
+to hand to another Mac and nothing to launch. `tools/bundle_app.sh` now assembles one from the release
+build and verifies its own output.
+
+- **Its own identity, not the original's.** The analysis documents the original as bundle id
+  `com.sundaysounds.sundaykeys`, version 2.5.2, build 3367. This bundle is
+  `com.worshipwarehouse.sundaykeys-cleanroom`, version 0.5.0, build 5, so the two can be installed
+  side by side and nothing here claims to be that build. The script says so too.
+- **The plist is written by the script, not checked in.** `CFBundleExecutable` is the SwiftPM product
+  name, `CFBundlePackageType` is `APPL`, `LSMinimumSystemVersion` is 14.0 to match
+  `Package.swift`, and `NSHighResolutionCapable` is set. `PkgInfo` carries `APPL????`.
+- **The signature is ad-hoc.** Apple silicon will not launch an unsigned bundle, and there is no
+  developer certificate in this environment, so the script signs with `-`. That is enough to launch
+  locally and is explicitly not distribution signing; nothing is notarised.
+- **The script verifies instead of assuming.** It lints the plist, checks the executable bit, runs
+  `codesign --verify --strict`, and asserts that the bundle's declared executable is the one it
+  placed. Any failed check exits non-zero, so the CI step fails with it.
+- **CI runs it.** The workflow builds the release configuration, then runs the bundler, then repeats
+  the executable, plist and signature checks and lists the bundle's files, so a red run says which
+  check failed. Run `42730684997` is the first to include the step and it passed.
+
+What this does not cover, and the script says so at the top: nobody has opened `SundayKeys.app`. The
+window, the AVAudioEngine start path against a real output device, CoreMIDI against a controller and
+the set list panel on screen are all still unverified, and a bundle that assembles and signs is not
+the same thing as an app that runs.
+
 ## Remote development: what CI actually does
 
 The local Mac has been unreachable for this whole stretch of work, so every result in this log comes
@@ -243,16 +273,19 @@ group that supersedes an older run, and a 25-minute timeout. Its steps are:
    twenty-five `error:` lines as check-run errors, so a red run is readable without the job log;
 5. `swift test -v`, with the same error and assertion surfacing on failure;
 6. `swift build -c release`, which compiles the optimised configuration as well as the debug one;
-7. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
+7. `tools/bundle_app.sh`, which assembles `SundayKeys.app`, signs it ad hoc and verifies the plist,
+   the executable and the signature, then the workflow repeats those checks and lists the files;
+8. run `bash tools/bootstrap.sh --check` and fail the job if it exits with anything other than 0 (all
    present) or 1 (tools missing) or if it fails to report the toolchain, which is the smoke test for
    the script's reporting and exit codes.
 
 What that does not cover, and this log will not pretend otherwise: the install path of
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
-machine), bundling a signed `.app`, starting `AVAudioEngine` against a real output device, CoreMIDI
-against a real controller, and anything that needs to be heard. The DSP is validated by offline
-tests that measure sample values, and the set list panel has never been looked at on a screen:
-nobody has listened to this or clicked through it on this hardware.
+machine), notarisation and distribution signing, launching the bundle, `AVAudioEngine` against a
+real output device, CoreMIDI against a real controller, and anything that needs to be heard. The DSP
+is validated by offline tests that measure sample values, and neither the set list panel nor the
+bundle has ever been looked at on a screen: nobody has listened to this or clicked through it on this
+hardware.
 
 ## Decompilation: awaiting external access
 
@@ -267,14 +300,17 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Bundle the package into a signed `.app` and add an audio-unit or standalone target, then use the
-   Mac for the first hardware validation: device output, a real controller, a click through the set
-   list panel, and a listen to the effects chain.
-2. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
+1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: audio device output, a
+   real controller, a click through the patch, set list, effects and mapping panels, and a listen to
+   the effects chain. This is the only step that needs the App Store Xcode and a person listening.
+2. An unattended launch smoke check in CI: start the bundle, wait for the process to stay alive, then
+   quit it, so a crash on launch is caught by the runner instead of by the player. The runner has a
+   window server, so this should be possible without the Mac, and it is the next thing to try.
+3. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
    behaviour of a controller that sends on several channels.
-3. Session scope beyond one ordered list, once there is evidence for it: the original app's session
+4. Session scope beyond one ordered list, once there is evidence for it: the original app's session
    contents are **Unknown**, so the next step is a capture or a decompiled session type, not a guess.
-4. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
+5. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
    `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,
    `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and
    commit the extracts under `docs/re/` with provenance.
@@ -306,6 +342,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `0fe89b7` | [42728400967](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728400967) | failure: the write-up commit carried the same fixture, so the same compile error and no test ran. Fixed in `9c6768d`. |
 | `9c6768d` | [42728534122](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42728534122) | failure, two tests of the new suite, eleven annotations, and both were assertions rather than the model: `testASlotWhosePatchIsMissingIsSkippedWhileStepping` expected the head at index 1 after stepping over the dangling middle slot, but a skipped slot is not removed, so the head is on index 2 of three; `testSteppingToAWetterPatchAppliesItsEffects` demanded an empty voice pool after 20 blocks, which is 10,240 frames of the 10,560-frame release. Fixed in `18e0268`. |
 | `18e0268` | [42729742825](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42729742825) | success: the debug build, all test suites including the set list ordering, persistence and set-list switching tests, the release build and the bootstrap smoke step. |
+| `a1a5e61` | [42730136694](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730136694) | success: the set list write-up, with no code change; build, tests, release build and the bootstrap smoke step. |
+| `3e0c3a9` | [42730684997](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42730684997) | success: build, all suites, the release build, the new bundle step and the bootstrap smoke step. The bundle step ran the script and passed its plist, executable and strict signature checks. The two annotations are the macOS queue notice and the SwiftPM manifest warning, not code warnings. |
 
 ## Coverage that remains
 
@@ -319,8 +357,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | the original app's MIDI CC assignments | not decompiled | awaiting external access; this implementation's default layout is its own design and can be relearned |
 | the original app's session and set-list contents | not decompiled and not captured | a capture or a decompiled session type; the type here reproduces the behaviour, not the file layout |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
-| `.app` bundle | not implemented | next action 1 |
-| audio device output, real controller, a clicked-through window | need the unreachable Mac | next action 1 |
+| launching the bundle, audio device output, a real controller, a clicked-through window | need the unreachable Mac | next action 1 |
+| an unattended launch smoke check | not written yet; needs a runner with a window server | next action 2 |
 
 ## Decisions recorded
 
@@ -356,6 +394,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | adding a patch does not add a slot | the service is what the player built, not a side effect of editing patches |
 | skipping a slot does not compact the list | the head reports the position that actually played, so a skipped dangling slot leaves the head on index 2 of three, and the UI numbering keeps matching the list |
 | a test that asserts the voice pool empty renders past the release | 220 ms is 20.6 blocks of 512 frames, so 20 blocks leaves a voice still fading; the envelope was right and the block count in the test was wrong |
+| the bundle carries its own identifier and version | the original is `com.sundaysounds.sundaykeys` 2.5.2 build 3367; reusing that identity would be false and would collide, so this is 0.5.0 build 5 of its own line and the two can be installed side by side |
+| the bundle is signed ad hoc, not for distribution | Apple silicon will not launch an unsigned bundle and there is no developer certificate here; ad-hoc signing is enough to launch locally and nothing is notarised, which the script states |
+| the bundler verifies its own output | a bundle that assembles is not a bundle that is well formed, so the script lints the plist, checks the executable, verifies the signature and fails the run if any check does |
 
 ## Commit trail
 
@@ -393,5 +434,7 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `0fe89b7` | the session and set list write-up in this log and the README |
 | `9c6768d` | the set list fixture's bank declared `var`, because stepping it is a mutation |
 | `18e0268` | the two set list assertions repaired, verified by run `42729742825` |
+| `a1a5e61` | the observed run table and the README updated; verified by run `42730136694` |
+| `3e0c3a9` | `tools/bundle_app.sh`, the CI bundle step and `build/` ignored; verified by run `42730684997` |
 
 Earlier analysis commits are listed in the analysis document itself.
