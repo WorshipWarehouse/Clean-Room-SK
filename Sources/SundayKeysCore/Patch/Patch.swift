@@ -2,27 +2,33 @@ import Darwin
 import Foundation
 
 /// A named patch: one or more layers, each with its own range, transpose, gain,
-/// timbre and enabled state, plus the effect settings the patch is played with.
+/// timbre and enabled state, plus the effect settings the patch is played with and
+/// the controller layout that drives them.
 ///
 /// Effects belong to the patch rather than to the engine. A patch is the whole
 /// sound, so switching patches has to switch the chain too; an effect setting that
-/// outlived its patch would bleed into the next one.
+/// outlived its patch would bleed into the next one. Controller assignments are
+/// stored here for the same reason: a restored session has to restore what the
+/// knobs do, not only what the keys sound like.
 public struct Patch: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var name: String
     public var layers: [KeyLayer]
     public var effects: EffectsSettings
+    public var controllerMapping: ControllerMapping
 
     public init(
         id: UUID = UUID(),
         name: String,
         layers: [KeyLayer],
-        effects: EffectsSettings = EffectsSettings()
+        effects: EffectsSettings = EffectsSettings(),
+        controllerMapping: ControllerMapping = .standard
     ) {
         self.id = id
         self.name = name
         self.layers = layers
         self.effects = effects
+        self.controllerMapping = controllerMapping
     }
 
     public var soundingLayers: [KeyLayer] {
@@ -48,9 +54,10 @@ public struct Patch: Codable, Equatable, Identifiable, Sendable {
 
 /// The whole set of patches the player has built, as written to disk.
 public struct PatchBank: Codable, Equatable, Sendable {
-    /// Version 2 added per-patch effects. Decoding stays tolerant: a version 1 bank
-    /// has no effects key and loads with the whole chain bypassed.
-    public static let currentVersion = 2
+    /// Version 2 added per-patch effects, version 3 the per-patch controller layout.
+    /// Decoding stays tolerant: an older bank has no such key and loads with the
+    /// chain bypassed and the standard controller layout.
+    public static let currentVersion = 3
 
     public var version: Int
     public var patches: [Patch]
@@ -116,13 +123,15 @@ public struct PatchStore {
 
 // Custom decoding rather than the synthesised conformance: a bank written before a
 // field existed must still load, with the field taking its documented default
-// instead of failing the whole bank. Effects were added in version 2.
+// instead of failing the whole bank. Effects were added in version 2 and the
+// controller layout in version 3.
 extension Patch {
     private enum CodingKeys: String, CodingKey {
         case id
         case name
         case layers
         case effects
+        case controllerMapping
     }
 
     public init(from decoder: Decoder) throws {
@@ -131,6 +140,7 @@ extension Patch {
         name = try container.decode(String.self, forKey: .name)
         layers = try container.decode([KeyLayer].self, forKey: .layers)
         effects = try container.decodeIfPresent(EffectsSettings.self, forKey: .effects) ?? EffectsSettings()
+        controllerMapping = try container.decodeIfPresent(ControllerMapping.self, forKey: .controllerMapping) ?? .standard
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -139,5 +149,6 @@ extension Patch {
         try container.encode(name, forKey: .name)
         try container.encode(layers, forKey: .layers)
         try container.encode(effects, forKey: .effects)
+        try container.encode(controllerMapping, forKey: .controllerMapping)
     }
 }
