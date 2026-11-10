@@ -22,15 +22,16 @@ this file tracks state.
 | Build, audio start | the graph starts on the runner's output device, renders a voice and stops; a missing device is a typed error instead of a crash | `AudioStartPlan.swift`, `AudioEngineController.start()`, `tools/audio_smoke.sh`, run `42733100695` |
 | Build, MIDI start | the client and input port are created on the runner and the source list is enumerated and reported; a missing client, a missing port and a refused connect are typed errors with their own exit status | `MIDIStartReport.swift`, `MIDIInputService.start()`, `tools/midi_smoke.sh`, run `42734422204` |
 | Build, MIDI status | the verdict is turned into one status line in the core module and the model retains it, so a refused client or port, a refused connect and an empty source list each read differently in the window | `Sources/SundayKeysCore/MIDI/MIDIStatus.swift`, run `42735872524` |
-| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention | `Tests/SundayKeysCoreTests/` |
+| Build, MIDI status tracking | the status follows the source list for as long as the client lives: a source appearing, disappearing or recovering updates it without pressing Start, and a refusal is kept only while it still applies | `Sources/SundayKeysCore/MIDI/MIDISourceTracker.swift`, `MIDIStatusBoard.refresh(with:)`, run `42737094402` |
+| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention, MIDI source tracking across refreshes | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
 controller layout, a playable set list, a bundle that CI assembles, verifies and launches, an audio
 graph that CI starts and renders through, a MIDI client that CI creates and enumerates, and a MIDI
-status that says which of those actually happened. What is still missing is everything that needs eyes
-and ears, and everything that needs a controller: no person has seen the window or read that status
-line, nothing has been listened to, and no controller has ever been plugged in, because the Mac that
-would do it is unreachable and the runner has no MIDI source.
+status that follows the source list and says which of those actually happened. What is still missing
+is everything that needs eyes and ears, and everything that needs a controller: no person has seen the
+window or read that status line, nothing has been listened to, and no controller has ever been plugged
+in, because the Mac that would do it is unreachable and the runner has no MIDI source.
 
 ## Audio milestone: what the instrument actually is
 
@@ -411,7 +412,7 @@ running with no explanation. That was next action 2, and it is now done.
 - **The wiring is deliberately small.** The line rides on the existing status message rather than a
   new view, because the app target has no tests and a new panel could not be asserted; `midiStatus` is
   published so the MIDI panel can show it once there is a way to test that. This is the honest half of
-  the fix, and the next action says so.
+  the fix, and the next action said so.
 - **Observed.** Run [`42735872524`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735872524)
   on `38f55d5`: the macos job succeeded and every step was green. Debug build with tests compiled the
   new core file and the rewritten model in 29 seconds (01:27:26 to 01:27:55); warnings at 01:27:55;
@@ -425,8 +426,62 @@ What this does not prove: that anyone has read the line. The status text is asse
 `MIDIStatusTests`, but the app target still has no test that the view shows it, and no person has
 looked at the window. It also does not prove that a real client or port ever refuses: the runner's
 client is always created, so the two unavailable lines are exercised by tests and not by hardware.
-And the status is only refreshed when Start is pressed - a source plugged in afterwards updates the
-source list through `onSourcesChanged` but leaves the status line as it was.
+
+## MIDI status tracking milestone: the line follows the source list
+
+The status above was computed once, when Start was pressed. A controller plugged in afterwards
+refreshed the source list but left the line saying `MIDI ready, no sources found`, and a source that
+had once refused stayed refused for ever, or vanished from the status while the port still held it.
+That was next action 2, and it is now done.
+
+- **A refusal now names the endpoint it refused.** `MIDIStartFailure.connectionFailed` carries
+  `sourceID` as well as the name and the `OSStatus`, with a `sourceID` accessor that is nil for the two
+  creation failures. Without that identity a refresh could not tell a refusal that still applies from
+  one about a source that has since gone or connected; matching on a display name would have made two
+  unnamed endpoints indistinguishable, which is exactly the case the report was built for.
+- **The rules live in `MIDISourceTracker` and are pure.** `Sources/SundayKeysCore/MIDI/MIDISourceTracker.swift`
+  answers three questions with no CoreMIDI present: which online endpoints the port does not hold yet
+  (offline endpoints are never attempted), which endpoints it holds, and which refusals are still
+  live. `prune(keeping:)` forgets connections and refusals for sources that are no longer enumerated,
+  and a source that connects retires its own refusal, so a device that recovers is not accused for
+  ever while a real fault survives a notification that changes nothing.
+- **The report cannot double count.** `report(for:)` derives the connected ids from the inventory, so
+  a stale endpoint cannot be reported, and an endpoint already held is never connected again. The two
+  defects that would have appeared here - a connected flag counted twice after two refreshes, and a
+  refusal cleared before the source had actually connected - are pinned by tests rather than left to
+  the hardware to reveal.
+- **The board refreshes through the same derivation.** `MIDIStatusBoard.refresh(with:)` applies a
+  report from the running client through `record(_:)`, so a list change and a fresh start produce the
+  same wording; there is no second code path for the status text to drift along.
+- **The service is now only calls.** `MIDIInputService` asks the tracker what to connect, performs
+  exactly those `MIDIPortConnectSource` calls, records successes and refusals, prunes, and publishes.
+  It publishes on the first start and on every refresh, through a new `onVerdictChanged` closure, and
+  the notify block from `MIDIClientCreateWithBlock` is what triggers the refresh.
+- **The model owns the published status.** `AppModel` records every verdict through
+  `MIDIStatusBoard` into `@Published private(set) var midiStatus` and rebuilds the status message
+  against the engine line it started with, so a refresh replaces the MIDI half of the message instead
+  of appending a second copy of it.
+- **What the tests pin.** `MIDISourceTrackerTests` drives the same loop the service runs and asserts:
+  a source appearing after start turns `no sources found` into `1 of 1 source(s) connected`; losing the
+  last source returns to `no sources found`; a second source arriving leaves the first connected; a
+  refusal is still there after a refresh that still cannot connect; the same source connecting later
+  removes the refusal; a refusal for a source that disappears is forgotten; an offline source is never
+  attempted; a connected source is not connected twice; failures keep enumeration order; and the board
+  updates from a refresh alone, with no second `start()` call.
+- **Observed.** Run [`42737094402`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42737094402)
+  on `8b08b44`: the macos job succeeded and all fifteen steps were green. Debug build with tests
+  01:38:01 to 01:38:19, warnings at 01:38:19, `swift test` 01:38:19 to 01:38:22, release build
+  01:38:22 to 01:38:35, bundle 01:38:35 to 01:38:36, launch step 12 01:38:36 to 01:38:42, audio step
+  13 01:38:42 to 01:38:44, MIDI step 14 01:38:44 to 01:38:46, bootstrap step 15 01:38:46 to 01:38:47,
+  job completed 01:38:51. The run published three annotations: the macOS capacity notice, the SwiftPM
+  manifest warning, and the MIDI probe's own no-sources warning, so the probes behaved exactly as they
+  had before the change and the runner still reports its empty source list rather than failing.
+
+What this does not prove: that a notification ever arrives on real hardware. The notify block is a
+CoreMIDI callback, and the runner has no source to plug in, so what the tests prove is the derivation
+and the state machine, not that macOS delivers the notification when a controller is attached. It also
+does not prove that the line is visible: nobody has looked at the window. And it does not prove the
+connect path itself, which still needs a source the runner does not have.
 
 ## Remote development: what CI actually does
 
@@ -478,22 +533,24 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, press
-   Start against a real output device, plug in a controller, click through the patch, set list,
-   effects and mapping panels, and listen to the effects chain. This is the only step that needs a
-   person listening, and it is the only way to exercise the MIDI connect path. It is also the only way
-   to read the new MIDI status line as a player would.
-2. Put the MIDI status on the MIDI panel and keep it current. The model publishes `midiStatus` and the
-   status line already shows it, but the panel still lists source names only, and a source plugged in
-   while the app runs refreshes the names through `onSourcesChanged` without re-reading the verdict.
-   The next step is to show the status in the panel and refresh it from `lastVerdict` when the source
-   list changes, which needs a model-level test rather than a view test.
+1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, read the
+   MIDI status line, press Start against a real output device, plug in a controller, watch the status
+   and the source list change, click through the patch, set list, effects and mapping panels, and
+   listen to the effects chain. This is the only step that needs a person listening, and it is the
+   only way to know that macOS actually delivers the source notification.
+2. Prove the MIDI connect path on CI. The runner creates the client and the port and enumerates zero
+   sources, so the connect loop has never run against an endpoint. The app can create a virtual
+   source of its own with `MIDISourceCreate` and then connect to it, which would exercise the success
+   branch and the tracker's connected state on a machine with no hardware; a probe that does that and
+   reports the source it connected to is the next hardware-independent step.
 3. MIDI refinements that need hardware: relative encoders, a foot switch, a controller that sends on
-   several channels, and a controller plugged in while the app runs, which is what the notify block
-   is for and what nothing has yet observed.
-4. Session scope beyond one ordered list, once there is evidence for it: the original app's session
+   several channels, and a controller refused by the port at runtime, which is the one refusal path
+   the tracker's tests can only simulate.
+4. Put the published `midiStatus` on the MIDI panel itself, so the panel says the status next to the
+   source names. This waits for a way to test the view; the model already publishes the value.
+5. Session scope beyond one ordered list, once there is evidence for it: the original app's session
    contents are **Unknown**, so the next step is a capture or a decompiled session type, not a guess.
-5. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
+6. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
    `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,
    `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and
    commit the extracts under `docs/re/` with provenance.
@@ -535,7 +592,9 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `8a071760` | [42733528643](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42733528643) | success: the audio start milestone write-up, with no code change to the tree above; build, all suites, warnings, release build, bundle, launch, audio and bootstrap steps all passed. Two annotations, the macOS capacity notice and the SwiftPM manifest warning. |
 | `2464172` | [42734422204](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42734422204) | success: build, all suites including `MIDIStartReportTests`, warnings, release build, bundle, launch step 12 (01:16:05 to 01:16:11), audio step 13 (01:16:11 to 01:16:14), MIDI step 14 (01:16:14 to 01:16:16) and the bootstrap step at 01:16:21. Three annotations: the capacity notice, the manifest warning, and the probe's own no-sources warning, which the script publishes only after finding the client marker and a source count and seeing a 0 exit. |
 | `1e71b17` | [42735307410](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735307410) | success: the README audio and MIDI rows, with no code change to the tree above. Build 01:22:40 to 01:23:05, warnings, tests 01:23:05 to 01:23:09, release 01:23:09 to 01:23:27, bundle 01:23:27 to 01:23:29, launch step 12 01:23:29 to 01:23:36, audio step 13 01:23:36 to 01:23:39, MIDI step 14 01:23:39 to 01:23:41, bootstrap step 15 01:23:41 to 01:23:43, job completed 01:23:48. Same three annotations. |
-| `38f55d5` | [42735872524](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735872524) | success: `MIDIStatus`, `MIDIStatusBoard`, `MIDIStatusTests` and the model wiring. Build 01:27:26 to 01:27:55, warnings at 01:27:55, tests 01:27:55 to 01:27:59, release 01:27:59 to 01:28:19, bundle 01:28:19 to 01:28:21, launch step 12 01:28:21 to 01:28:28, audio step 13 01:28:28 to 01:28:31, MIDI step 14 01:28:31 to 01:28:32, bootstrap step 15 01:28:32 to 01:28:35, job completed 01:28:40. Three annotations: the capacity notice, the manifest warning and the MIDI probe's no-sources warning, so the probes behaved as before. The test step's conclusion is the suite's exit status; the individual test names were not read, because the job log download truncates before the later steps. |
+| `38f55d5` | [42735872524](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42735872524) | success: `MIDIStatus`, `MIDIStatusBoard`, `MIDIStatusTests` and the model wiring. Build 01:27:26 to 01:27:55, warnings at 01:27:55, tests 01:27:55 to 01:27:59, release 01:27:59 to 01:28:19, bundle 01:28:19 to 01:28:21, launch step 12 01:28:21 to 01:28:28, audio step 13 01:28:28 to 01:28:31, MIDI step 14 01:28:31 to 01:28:32, bootstrap step 15 01:28:32 to 01:28:35, job completed 01:28:40. Three annotations: the capacity notice, the manifest warning and the MIDI probe's no-sources warning, so the probes behaved as before. |
+| `4e231f5` | [42736399834](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42736399834) | success: the MIDI status write-up, with no code change to the tree above. Build 01:32:04 to 01:32:31, warnings at 01:32:31, tests 01:32:31 to 01:32:35, release 01:32:35 to 01:32:52, bundle 01:32:52 to 01:32:54, launch step 12 01:32:54 to 01:33:00, audio step 13 01:33:00 to 01:33:03, MIDI step 14 01:33:03 to 01:33:04, bootstrap step 15 01:33:04 to 01:33:08, job completed 01:33:14. This run published **no annotations at all** - not the capacity notice, not the manifest warning, not the probe's no-sources warning - even though the MIDI step passed. The cause was not established; the next run carried all three again, so it reads as a per-run reporting gap rather than a change in the probe. |
+| `8b08b44` | [42737094402](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42737094402) | success: `MIDISourceTracker`, `MIDIStatusBoard.refresh(with:)`, the endpoint identity on a refused connect, `MIDISourceTrackerTests`, and the model wiring. Build 01:38:01 to 01:38:19, warnings at 01:38:19, tests 01:38:19 to 01:38:22, release 01:38:22 to 01:38:35, bundle 01:38:35 to 01:38:36, launch step 12 01:38:36 to 01:38:42, audio step 13 01:38:42 to 01:38:44, MIDI step 14 01:38:44 to 01:38:46, bootstrap step 15 01:38:46 to 01:38:47, job completed 01:38:51. Three annotations: the capacity notice, the manifest warning and the MIDI probe's no-sources warning. |
 
 ## Coverage that remains
 
@@ -551,9 +610,10 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
 | whether audio sounds right | a rendered voice count says the callback ran, not that the output is musical | next action 1, with a person listening |
 | seeing the window, reading the status line, using a real controller | need the unreachable Mac | next action 1 |
-| a MIDI source being connected and played from | the client and port are created on the runner, but the runner has no source, so the connect loop never ran against an endpoint | next action 1, with a controller attached |
-| the MIDI status reaching a player | the text is asserted in tests and the model retains it, but the app target has no view test and nobody has looked at the window | next action 1 |
-| the status staying current across a hot-plug | the source list refreshes on a notification, the status is only recomputed when Start is pressed | next action 2 |
+| a MIDI source being connected and played from | the client and port are created on the runner, but the runner has no source, so the connect loop never ran against an endpoint | next action 2, with a virtual source the probe creates itself |
+| the MIDI status reaching a player | the text is asserted in tests and the model retains and refreshes it, but the app target has no view test and nobody has looked at the window | next action 1 |
+| the source notification arriving on real hardware | the notify block is a CoreMIDI callback and the runner has no source to attach, so the refresh is exercised by tests rather than by a plug-in event | next action 1 |
+| a port refusing a source at runtime | every refusal in the tests is simulated; no port has refused a real endpoint here | next action 1, with a controller the port can reject |
 
 ## Decisions recorded
 
@@ -606,6 +666,10 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | a client with no sources is not a failure | an empty list is a fact about the hardware; calling it a failure would accuse a working client and hide the one thing the probe proved |
 | only the first refused connect is shown in the status | one line cannot list several, and the report already fixes the order, so the first failure is the one the player is told about |
 | the status rides on the existing status message | the app target has no tests, so a new panel would ship unverified; the published `midiStatus` is what a later, testable panel will read |
+| a refused connect is keyed by endpoint, not by name | a name cannot identify a source that may be unnamed, duplicated or renamed between refreshes, and the tracker has to know which refusal still applies |
+| the tracker owns the connect rules, not the service | the rules are what a regression would break, and CoreMIDI in the app target cannot be exercised by `swift test` on a machine with no source |
+| a refusal is kept while its source is present and unconnected | a notification that changes nothing must not erase a real fault, and a device that recovers must stop being accused |
+| the status is recomputed from a report, not patched in place | one derivation for a start and a refresh means the wording cannot drift between pressing Start and plugging a controller in |
 
 ## Commit trail
 
@@ -657,6 +721,8 @@ without the job log. Rows are added only for runs whose conclusion has been read
 | `f60982c` | the MIDI start milestone in this log; superseded by the README push before its run was read |
 | `1e71b17` | README audio and MIDI rows; verified by run `42735307410` |
 | `38f55d5` | `MIDIStatus`, `MIDIStatusBoard`, `MIDIStatusTests` and the model wiring that keeps the verdict; verified by run `42735872524` |
+| `4e231f5` | the MIDI status milestone in this log and its run rows; verified by run `42736399834` |
+| `8b08b44` | `MIDISourceTracker`, the endpoint identity on a refused connect, `MIDIStatusBoard.refresh(with:)`, `MIDISourceTrackerTests` and the service and model wiring; verified by run `42737094402` |
 
 Earlier analysis commits, the toolchain work and the corpus extractors are listed in
 [`sunday-keys-2.5.2-analysis.md`](sunday-keys-2.5.2-analysis.md).
