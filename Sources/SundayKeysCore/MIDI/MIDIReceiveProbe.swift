@@ -181,6 +181,10 @@ public struct MIDIReceiveProbe: Equatable, Sendable {
             "MIDI receive probe: the app received \(received.count) message(s): \(counts.noteOns) note on, \(counts.noteOffs) note off, \(counts.controlChanges) control change"
         )
 
+        // One line per message, so the step output says which message came back
+        // rather than only how many of each the summary counted.
+        lines.append(contentsOf: received.map { "MIDI receive probe: received \(name(of: $0))" })
+
         if let routedLayers, let enabledLayers {
             lines.append(
                 "MIDI receive probe: layer routing sent note \(expectation.note) to \(routedLayers) of \(enabledLayers) enabled layer(s)"
@@ -191,7 +195,25 @@ public struct MIDIReceiveProbe: Equatable, Sendable {
         return lines
     }
 
-    /// Counts only the messages the probe meant to send, so a stray packet from
+    /// Names a parsed message the way the rest of the probe describes packets.
+    private func name(of message: MIDIMessage) -> String {
+        switch message {
+        case let .noteOn(note, velocity, channel):
+            return "note on \(note) velocity \(velocity) on channel \(Int(channel) + 1)"
+        case let .noteOff(note, velocity, channel):
+            return "note off \(note) velocity \(velocity) on channel \(Int(channel) + 1)"
+        case let .controlChange(controller, value, channel):
+            return "control change \(controller) = \(value) on channel \(Int(channel) + 1)"
+        case let .programChange(program, channel):
+            return "program change \(program) on channel \(Int(channel) + 1)"
+        case let .pitchBend(value, channel):
+            return "pitch bend \(value) on channel \(Int(channel) + 1)"
+        case let .other(status, data):
+            return "status \(status) with \(data.count) byte(s)"
+        }
+    }
+
+    /// Counts only the messages the probe means to send, so a stray packet from
     /// anything else on the machine cannot stand in for one of them.
     private func counts(in messages: [MIDIMessage]) -> (noteOns: Int, noteOffs: Int, controlChanges: Int) {
         var noteOns = 0
