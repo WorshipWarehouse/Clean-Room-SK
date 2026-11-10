@@ -17,7 +17,8 @@ Nothing here is produced by executing the original app, and no original source w
 | launched in CI | the runner starts the bundle, sees AppKit finish launching and the SwiftUI root view appear, watches the run loop service a timer, and sees a status 0 exit; no person has seen the window |
 | audio started in CI | the runner presses Start from inside the app, the graph opens on its default output device, plays a note and the render block reports a rendered voice; a machine with no output device is a typed error rather than a crash |
 | MIDI connected in CI | the runner creates a CoreMIDI client and an input port, enumerates the source list, then publishes a virtual source of its own and lets the engine's own enumeration find it and connect it; the status reads `MIDI ready, 1 of 1 source(s) connected`, and a start with no source still says so instead of hiding it |
-| not yet verified on hardware | no controller has ever been connected, nothing has been sent from the virtual source, nothing has been listened to, and no person has seen the window |
+| MIDI received in CI | the runner sends a note on, a note off and a control change from a virtual source into the app's own input port, and the app reports the three messages it parsed and the one of two enabled layers it routed the note to |
+| not yet verified on hardware | no controller has ever been connected and no person has seen the window; the only MIDI traffic the app has ever seen came from the probe's own virtual source |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -48,7 +49,7 @@ dispatch references over 2,527 descriptors.
 | `tools/bundle_app.sh` | assembles, signs and verifies `SundayKeys.app` from the release build |
 | `tools/launch_smoke.sh` | starts the bundle, asserts its startup markers and a clean exit, and fails with the captured output otherwise |
 | `tools/audio_smoke.sh` | presses Start inside the app, requires a rendered voice and a clean exit, and reports a missing output device as a limitation |
-| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, publishes a virtual source, requires the engine to enumerate and connect it, and reports a machine with no source as a limitation |
+| `tools/midi_smoke.sh` | creates the MIDI client and input port inside the app, publishes a virtual source, requires the engine to enumerate and connect it, then sends a note on, a note off and a control change from that source and requires the app to parse them and route the note, and reports a machine with no source as a limitation |
 | `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift` | classifies what a connect attempt against the probe's own virtual source proved |
 | `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift` | publishes, and then disposes, the virtual CoreMIDI source the connect probe connects to |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
@@ -61,7 +62,7 @@ swift test           # core tests
 tools/bundle_app.sh  # release build, then build/SundayKeys.app
 tools/launch_smoke.sh  # start it, prove it reached its run loop, prove it exited 0
 tools/audio_smoke.sh   # press Start from inside it, prove the render block made a voice
-tools/midi_smoke.sh    # create the client and port, publish a virtual source, prove it connects
+tools/midi_smoke.sh    # create the client and port, publish a virtual source, prove it connects and receives
 open build/SundayKeys.app
 ```
 
@@ -322,8 +323,33 @@ its port connects it and the status it derives reads `MIDI ready, 1 of 1 source(
 Run [`42740507134`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42740507134) on
 `7d5cd17` is the first green run of it: all fifteen steps passed and the step published "MIDI
 connect probe: virtual source created, engine enumerated 1 source(s), connected 1, status: MIDI
-ready, 1 of 1 source(s) connected". Nothing has been sent from that source yet, so the receive path
-is next.
+ready, 1 of 1 source(s) connected". The next section is the pass that sent packets through it and read what the app parsed.
+
+### Sending into the app
+
+Connecting a source proves the port accepted it; it does not prove the app can read what arrives.
+The same probe now sends. `SUNDAYKEYS_PROBE_MIDI_CONNECT=1` builds a packet list carrying a note on,
+a note off and a control change, calls `MIDIReceived` on the source the port is connected to, then
+waits for its own input block to collect what came back.
+
+- `MIDIMessage.parseAll` is the packet-level parse: running status, real-time bytes skipped, a note
+  on with velocity 0 read as a note off, and a stop at a truncated tail. It exists because one
+  packet can carry several messages, and the input block used to read the first three bytes and drop
+  the rest - a real defect the probe caught, recorded in `docs/progress.md`.
+- `MIDIReceiveProbe` owns the expected bytes and the verdict, and counting filters on the expected
+  note, controller and channel so nothing else on the machine can stand in.
+- the app prints one `MIDI receive probe: received ...` line per parsed message, a summary, the layer
+  the note reached and its verdict, and `tools/midi_smoke.sh` publishes the message lines as notices
+  before it asserts anything, so a failing step still shows what the app saw.
+- the exit status names the first thing missing: 0 every packet parsed, 10 no note off, 11 no control
+  change, 12 nothing received, 13 no note on.
+
+Run [`42744820518`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42744820518) on
+`16b2c9f` is green with it: the job published "MIDI receive probe: received note on 60 velocity 100 on
+channel 1", "MIDI receive probe: received note off 60 velocity 64 on channel 1", "MIDI receive probe:
+layer routing sent note 60 to 1 of 2 enabled layer(s)" and "MIDI receive probe: outcome: the app
+parsed every packet: 1 note on, 1 note off, 1 control change". A physical controller and a window
+are still missing.
 
 ## Reproduce the analysis
 
@@ -379,7 +405,7 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
 - The bundle is assembled, signed, checked, started and given an audio graph and a MIDI client on the
 runner, but no person has seen its window: nothing has been listened to, no controller has been
-  connected, nothing has been sent from the virtual source, and no local build has been run; every
+  connected, and no local build has been run; the only MIDI traffic the app has ever seen came from the probe's own virtual source, and every
   result comes from the macOS runner.
 - The set list panel, the effects panel and the controller panel have never been looked at on a
   screen.

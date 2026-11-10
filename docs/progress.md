@@ -593,30 +593,113 @@ What this does not prove: that anything is ever sent from the source. The port h
 app published itself, so the receive path and a real controller's messages are still unexercised,
 and no person has seen the status line or heard a note.
 
+## MIDI receive, end to end
+
+The connect probe proved the port accepted a source; nothing had ever travelled through it, so
+`MIDIReceived` -> `MIDIMessage.parse` -> `LayerRouter` had only ever run on bytes a unit test built.
+`tools/midi_smoke.sh` now has a third phase that runs only after the connect probe has proved
+itself: the app builds a packet list and pushes it through `MIDIReceived`, the engine's own input
+port delivers it back, and the app prints what its input block parsed out of the packet, what layer
+routing did with the note, and its verdict. The script reads those lines and the exit status; it
+never claims the parse itself.
+
+- **One packet can carry several messages, and the app dropped them.** The probe sends a note on, a
+  note off and a control change in one packet list, and the first end-to-end attempt parsed only the
+  note on: `MIDIInputService.receive` read `packet.data.0` to `packet.data.2` and never looked at the
+  rest of the packet, so every message after the first was lost. Run `42742938963` reported it as
+  `midi smoke check: the app reported a connected source but exited with 10 instead of 0`, 10
+  meaning "no note off". It is a defect a controller would have hit: any device that packs more
+  than one message into a packet would have had the later ones silently dropped. It was fixed
+  rather than asserted around. `MIDIMessage.parseAll` walks a whole packet - a status byte
+  re-applied as running status, real-time bytes skipped, a note on with velocity 0 read as a note
+  off, the walk stopping at a truncated tail - and the input block now hands it the whole packet
+  through `withUnsafeBytes(of: packet.data)`. `Tests/SundayKeysCoreTests/MIDIMessageParseAllTests.swift`
+  pins the multi-message packet, running status, the zero-velocity note off, the truncated tail and
+  the real-time bytes, and checks that a one-message packet parses identically through both entry
+  points.
+- **The expectation owns the bytes.** `MIDIReceiveProbe` in the core module builds the packets,
+  counts what came back and decides the verdict, so the send, the counting and the tests cannot
+  drift apart. Counting filters on the expected note, controller and channel, so a packet from
+  anywhere else on the machine cannot stand in for the probe's own.
+- **The exit status names the first thing missing**: 0 every packet parsed, 10 no note off, 11 no
+  control change, 12 nothing received, 13 no note on; a connect that never proved itself keeps the
+  status it already had (4 to 9).
+- **The start probe's warning is untouched.** It still publishes "this machine has no MIDI sources:
+  the start probe proved the client and input port were created and the source list was empty",
+  because it runs before any source of the probe's own exists, and connect evidence and receive
+  evidence are separate lines: a `MIDI connect probe:` notice and one `MIDI receive probe:` notice
+  per message.
+
+### The runs
+
+Run [`42744377274`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42744377274) on
+`dc78b8e` is the first green run with the receive phase: all fifteen steps passed and the job
+published, in the app's own words,
+
+    MIDI receive probe: sent note on 60 velocity 100 on channel 1
+    MIDI receive probe: sent note off 60 on channel 1
+    MIDI receive probe: sent control change 1 = 64 on channel 1
+    MIDI receive probe: the app received 3 message(s): 1 note on, 1 note off, 1 control change
+    MIDI receive probe: received note on 60 velocity 100 on channel 1
+    MIDI receive probe: received note off 60 velocity 64 on channel 1
+
+beside the connect notice ("MIDI connect probe: virtual source created, engine enumerated 1
+source(s), connected 1, status: MIDI ready, 1 of 1 source(s) connected") and the no-sources warning
+quoted above. The `sent` lines are the app's report that `MIDIReceived` accepted a packet and the
+`received` lines are its input block's parse of what came back through its own port, so the packet
+crossed CoreMIDI rather than a shortcut in the probe.
+Step timings read from that job: setup 02:40:35-02:40:36, checkout to 02:40:38, toolchain to
+02:40:42, dependencies to 02:40:45, debug build to 02:41:09, tests to 02:41:12, release build to
+02:41:30, bundle to 02:41:31, launch to 02:41:38, audio probe to 02:41:40, "Probe the MIDI start"
+02:41:40-02:41:43, bootstrap check to 02:41:46, job complete 02:41:52.
+
+GitHub attaches at most ten annotations to a step, and that run's three per-send `send status 0`
+notices spent three of them, so the layer-routing line and the probe's verdict never appeared: the
+step passed, but a reader could not see the routing result. `tools/midi_smoke.sh` now publishes
+only the message lines, which leaves them inside the cap, and the assertions did not change.
+Run [`42744820518`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42744820518) on
+`16b2c9f` is green with that trim and publishes the rest of the evidence:
+
+    MIDI receive probe: received note on 60 velocity 100 on channel 1
+    MIDI receive probe: received note off 60 velocity 64 on channel 1
+    MIDI receive probe: received control change 1 = 64 on channel 1
+    MIDI receive probe: layer routing sent note 60 to 1 of 2 enabled layer(s)
+    MIDI receive probe: outcome: the app parsed every packet: 1 note on, 1 note off, 1 control change
+
+Its timings: setup 02:44:52-02:44:53, checkout to 02:44:55, toolchain to 02:44:57, dependencies to
+02:45:00, debug build to 02:45:17, tests to 02:45:21, release build to 02:45:36, bundle to 02:45:37,
+launch to 02:45:43, audio probe to 02:45:45, "Probe the MIDI start" 02:45:45-02:45:47, bootstrap
+check to 02:45:49, job complete 02:45:51.
+
+What this does not show: a physical controller, a window, or a second device packing messages into
+one packet - the multi-message case is covered by the probe's own packet list and the parse tests.
+
+### Runs read this pass
+
+| run | head | what it actually did |
+| --- | --- | --- |
+| `42741926197` | `b55b65d` | never started: the run stayed `queued` with no job, no steps and no annotations, so it carries no evidence and is recorded as unstarted rather than as a pass |
+| `42742678831` | `d3bdd43` | step 5 failed 02:25:50-02:26:14 on a byte-count type in the virtual source's send; fixed in `72c5272` |
+| `42742797771` | `72c5272` | step 5 failed 02:26:52-02:27:21: `error: cannot convert value of type 'UInt32' to expected argument type 'Int'` in `VirtualMIDISource.swift`, fixed in `07e5d4f` |
+| `42742938963` | `07e5d4f` | steps 1-13 passed, step 14 failed 02:29:22-02:29:27 with `midi smoke check: the app reported a connected source but exited with 10 instead of 0` - the multi-message packet defect above |
+| `42744377274` | `dc78b8e` | green: the app received and parsed the note on, note off and control change |
+| `42744820518` | `16b2c9f` | green, and the routing and verdict lines are published as well |
+
 ## Next actions, in order
 
-1. Launch `SundayKeys.app` on the Mac and do the first hardware validation: see the window, read the
-   MIDI status line, press Start against a real output device, plug in a controller, watch the status
-   and the source list change, click through the patch, set list, effects and mapping panels, and
-   listen to the effects chain. This is the only step that needs a person listening, and it is the
-   only way to know that macOS actually delivers the source notification.
-2. Send from the virtual source. The port now connects a source the probe published, but nothing has
-   ever been sent through it, so the receive path, `MIDIMessage.parse` and the layer routing that
-   follows a note have never run from a real MIDI packet. `MIDIReceived` on that source, with the
-   engine counting the notes it decoded, is the next hardware-independent step and the last one before
-   a controller is needed.
-3. MIDI refinements that need hardware: relative encoders, a foot switch, a controller that sends on
-   several channels, and a controller refused by the port at runtime, which is the one refusal path
-   the tracker's tests can only simulate.
-4. Put the published `midiStatus` on the MIDI panel itself, so the panel says the status next to the
-   source names. This waits for a way to test the view; the model already publishes the value.
-5. Session scope beyond one ordered list, once there is evidence for it: the original app's session
-   contents are **Unknown**, so the next step is a capture or a decompiled session type, not a guess.
-6. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
-   `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,
-   `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and
-   commit the extracts under `docs/re/` with provenance.
-
+1. **A controller on a real Mac.** Every MIDI packet so far came from the probe's own virtual
+   source. A physical device is the only way to see a real packet list, a real source name and what
+   a controller sends when its knobs move; the virtual path is green, so this is validation rather
+   than a blocker.
+2. **Hardware MIDI refinements.** Channel filtering, program change onto the patch index and the
+   learned controller layout all run on the virtual path now; untested on hardware are a device that
+   sends running status, several messages per packet, or an active-sensing stream.
+3. **The panel status.** The MIDI status line and the routing behaviour have never been looked at on
+   a screen; a window and a person are what is missing, not code.
+4. **Session scope.** Patches, effects, mapping and the set list persist; what a service should keep
+   across launches (last patch, set position, mapping edits) is not decided.
+5. **Decompilation of the next targets** stays blocked on host access to the original binary; see
+   `docs/re/access-determination.md`.
 ## Build verification
 
 `.github/workflows/build.yml` runs the steps listed above on a `macos-15` runner for every push to
