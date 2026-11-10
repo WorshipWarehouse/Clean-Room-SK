@@ -17,8 +17,6 @@ public struct AudioStartPlan: Equatable {
         self.sampleRate = sampleRate
         self.channelCount = channelCount
     }
-
-    public var frameCount: Double { sampleRate }
 }
 
 /// Why the graph could not be started.
@@ -27,7 +25,13 @@ public struct AudioStartPlan: Equatable {
 /// `AppModel` puts them straight into its status line, and to be grepped by
 /// `tools/audio_smoke.sh`, which has to tell a machine with no output device
 /// apart from a real failure.
-public enum AudioStartFailure: Error, Equatable, CustomStringConvertible {
+///
+/// Equality is written out rather than synthesised, because one of the values
+/// this type carries is a `Double` that may be NaN, and NaN is never equal to
+/// itself. Synthesised equality would make a rejected NaN rate impossible to
+/// assert or to compare in a test, so two rejections are equal when they report
+/// the same rate down to the bits.
+public enum AudioStartFailure: Error, CustomStringConvertible {
     /// No default output device is present. Starting anyway would raise inside
     /// `AVAudioEngine` and take the process with it.
     case noOutputDevice
@@ -44,6 +48,21 @@ public enum AudioStartFailure: Error, Equatable, CustomStringConvertible {
             return "The output device reported an unusable sample rate (\(reportedSampleRate) Hz)"
         case let .engineFailed(message):
             return "The audio engine could not start: \(message)"
+        }
+    }
+}
+
+extension AudioStartFailure: Equatable {
+    public static func == (lhs: AudioStartFailure, rhs: AudioStartFailure) -> Bool {
+        switch (lhs, rhs) {
+        case (.noOutputDevice, .noOutputDevice):
+            return true
+        case let (.unsupportedFormat(left), .unsupportedFormat(right)):
+            return left.bitPattern == right.bitPattern
+        case let (.engineFailed(left), .engineFailed(right)):
+            return left == right
+        default:
+            return false
         }
     }
 }

@@ -21,14 +21,16 @@ import SundayKeysCore
 /// - `SUNDAYKEYS_PROBE_START_ENGINE=1` starts the audio graph, plays one note and
 ///   reports the voice count the render block actually produced, then exits. The
 ///   exit status is the probe's verdict: 0 started and rendered, 4 refused to
-///   start, 5 started but produced no voice.
+///   start, 5 started but produced no voice, 6 lost the graph it made.
 @MainActor
 enum LaunchProbe {
     private static let marker = "SundayKeysApp"
     private static var rootViewAppeared = false
 
-    /// Kept alive by the timer below while the probe runs, so the graph and the
-    /// voice it is rendering are not deallocated before the count is read.
+    /// Held while the probe runs so the graph and the voice it is rendering are
+    /// not deallocated before the count is read. The timer reaches the graph
+    /// through this reference rather than capturing it, because the timer's block
+    /// is `@Sendable` and the graph is main-actor state.
     private static var probeController: AudioEngineController?
 
     static func report(_ event: String) {
@@ -95,12 +97,16 @@ enum LaunchProbe {
 
         Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) { _ in
             Task { @MainActor in
+                guard let controller = LaunchProbe.probeController else {
+                    LaunchProbe.report("engine probe lost its graph")
+                    exit(6)
+                }
                 let voices = controller.activeVoices
                 controller.noteOff(note: 69)
-                report("engine rendered \(voices) voice(s)")
+                LaunchProbe.report("engine rendered \(voices) voice(s)")
                 controller.stop()
-                probeController = nil
-                report("engine stopped")
+                LaunchProbe.probeController = nil
+                LaunchProbe.report("engine stopped")
                 exit(voices > 0 ? 0 : 5)
             }
         }

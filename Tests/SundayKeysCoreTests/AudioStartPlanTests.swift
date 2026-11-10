@@ -37,6 +37,17 @@ final class AudioStartPlanTests: XCTestCase {
         }
     }
 
+    /// `Double.nan != Double.nan`, so a rejection carrying a NaN rate can only be
+    /// compared if equality reads the bits. This pins that rule: without it the
+    /// case above could only be asserted by matching the enum case, and the value
+    /// it reports could not be checked at all.
+    func testARejectionCarryingNanIsEqualToItself() {
+        let failure = AudioStartFailure.unsupportedFormat(reportedSampleRate: .nan)
+        XCTAssertEqual(failure, AudioStartFailure.unsupportedFormat(reportedSampleRate: .nan))
+        XCTAssertNotEqual(failure, AudioStartFailure.unsupportedFormat(reportedSampleRate: 0))
+        XCTAssertNotEqual(failure, AudioStartFailure.noOutputDevice)
+    }
+
     func testTheStereoShapeIsAlwaysRequired() throws {
         let plan = try AudioStartPlanner.plan(forReportedSampleRate: 48_000)
         XCTAssertEqual(plan, AudioStartPlan(sampleRate: 48_000, channelCount: 2))
@@ -46,5 +57,6 @@ final class AudioStartPlanTests: XCTestCase {
         let failure = AudioStartFailure.engineFailed("the device is busy")
         XCTAssertTrue(failure.description.contains("the device is busy"))
         XCTAssertTrue(failure.description.contains("could not start"))
+        XCTAssertNotEqual(failure, AudioStartFailure.engineFailed("another reason"))
     }
 }
