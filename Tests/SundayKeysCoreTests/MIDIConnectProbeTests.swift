@@ -47,8 +47,8 @@ final class MIDIConnectProbeTests: XCTestCase {
         let probe = MIDIConnectProbe(attempt: .created(source), verdict: verdict(for: inventory([source])))
 
         XCTAssertEqual(probe.outcome, .connected(uniqueID: 900))
-        XCTAssertTrue(probe.outcome.provesConnectPath)
-        XCTAssertEqual(probe.outcome.exitCode, 0)
+        XCTAssertTrue(probe.provesConnectPath)
+        XCTAssertEqual(probe.exitCode, 0)
         XCTAssertEqual(probe.status, .ready(connected: 1, available: 1))
         XCTAssertEqual(probe.status.text, "MIDI ready, 1 of 1 source(s) connected")
         XCTAssertTrue(probe.lines.contains { $0.hasPrefix("MIDI probe: virtual source created") })
@@ -69,8 +69,8 @@ final class MIDIConnectProbeTests: XCTestCase {
             sourceName: "SundayKeys Virtual Source",
             status: -10830
         )))
-        XCTAssertFalse(probe.outcome.provesConnectPath)
-        XCTAssertEqual(probe.outcome.exitCode, 6)
+        XCTAssertFalse(probe.provesConnectPath)
+        XCTAssertEqual(probe.exitCode, 6)
         XCTAssertEqual(
             probe.status.text,
             "MIDI ready, 0 of 1 source(s) connected; could not connect source \"SundayKeys Virtual Source\" (status -10830)"
@@ -81,8 +81,8 @@ final class MIDIConnectProbeTests: XCTestCase {
         let probe = MIDIConnectProbe(attempt: .refused(status: -50), verdict: verdict(for: inventory([])))
 
         XCTAssertEqual(probe.outcome, .noVirtualSource(status: -50))
-        XCTAssertEqual(probe.outcome.exitCode, 7)
-        XCTAssertFalse(probe.outcome.provesConnectPath)
+        XCTAssertEqual(probe.exitCode, 7)
+        XCTAssertFalse(probe.provesConnectPath)
         XCTAssertEqual(probe.status.text, "MIDI ready, no sources found")
         XCTAssertFalse(probe.status.isFailure)
         XCTAssertTrue(probe.lines.contains { $0.contains("MIDISourceCreate failed with status -50") })
@@ -93,8 +93,8 @@ final class MIDIConnectProbeTests: XCTestCase {
         let probe = MIDIConnectProbe(attempt: .created(virtualSource()), verdict: verdict(for: inventory([])))
 
         XCTAssertEqual(probe.outcome, .virtualSourceNotEnumerated(uniqueID: 900))
-        XCTAssertEqual(probe.outcome.exitCode, 8)
-        XCTAssertFalse(probe.outcome.provesConnectPath)
+        XCTAssertEqual(probe.exitCode, 8)
+        XCTAssertFalse(probe.provesConnectPath)
     }
 
     func testASourceTheEngineListsButNeverAttemptsIsReportedAsIdle() {
@@ -102,8 +102,8 @@ final class MIDIConnectProbeTests: XCTestCase {
         let probe = MIDIConnectProbe(attempt: .created(offline), verdict: verdict(for: inventory([offline])))
 
         XCTAssertEqual(probe.outcome, .virtualSourceIdle(uniqueID: 900))
-        XCTAssertEqual(probe.outcome.exitCode, 9)
-        XCTAssertFalse(probe.outcome.provesConnectPath)
+        XCTAssertEqual(probe.exitCode, 9)
+        XCTAssertFalse(probe.provesConnectPath)
     }
 
     func testAClientThatCannotBeCreatedIsStillReportedThroughTheProbe() {
@@ -113,7 +113,7 @@ final class MIDIConnectProbeTests: XCTestCase {
         )
 
         XCTAssertEqual(probe.outcome, .startRefused(failure: .clientCreationFailed(status: -50)))
-        XCTAssertEqual(probe.outcome.exitCode, 4)
+        XCTAssertEqual(probe.exitCode, 4)
         XCTAssertTrue(probe.status.isFailure)
         XCTAssertEqual(probe.status.text, "MIDI unavailable: MIDIClientCreate failed with status -50")
     }
@@ -129,7 +129,10 @@ final class MIDIConnectProbeTests: XCTestCase {
         ]
 
         XCTAssertEqual(Set(outcomes.map(\.description)).count, outcomes.count)
-        XCTAssertEqual(Set(outcomes.map(\.exitCode)), Set<Int32>([0, 4, 6, 7, 8, 9]))
+        // 0 connected, 5 no input port, 6 refused connect, 7 no virtual source,
+        // 8 never enumerated, 9 listed but never attempted. A missing client is
+        // a 4 on its own, asserted by the case above.
+        XCTAssertEqual(Set(outcomes.map(\.exitCode)), Set<Int32>([0, 5, 6, 7, 8, 9]))
         XCTAssertEqual(outcomes.filter(\.provesConnectPath), [.connected(uniqueID: 900)])
     }
 }
