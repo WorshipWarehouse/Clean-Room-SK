@@ -20,6 +20,7 @@ Nothing here is produced by executing the original app, and no original source w
 | MIDI received in CI | the runner sends a note on, a note off and a control change from a virtual source into the app's own input port, and the app reports the three messages it parsed and the one of two enabled layers it routed the note to |
 | session resumed on launch | the patch that was playing is remembered in its own file beside the bank, so a relaunch opens where the service left off rather than at the first patch; a stale or unreadable hint falls back and says why |
 | relaunch proven on disk | run `42821991761` starts the bundle three times against one folder: one writes a bank and remembers the third patch, the next launch prints the resumed patch with the play head on its slot, and a hint naming a deleted patch falls back with its reason |
+| tempo and click | a sample-accurate click the render thread generates from a tempo clock: downbeats accented, a tempo change taking effect on the next beat, the click added after the patch's effects so nothing echoes it, and switching it off letting the click in flight finish |
 | not yet verified on hardware | no controller has ever been connected and no person has seen the window; the only MIDI traffic the app has ever seen came from the probe's own virtual source |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
@@ -352,6 +353,37 @@ channel 1", "MIDI receive probe: received note off 60 velocity 64 on channel 1",
 layer routing sent note 60 to 1 of 2 enabled layer(s)" and "MIDI receive probe: outcome: the app
 parsed every packet: 1 note on, 1 note off, 1 control change". A physical controller and a window
 are still missing.
+
+## Tempo and the click
+
+A player rehearsing needs a pulse, and the instrument had none. The click is a
+tempo clock in the core module plus a short synthesised click, and the render
+thread adds it to the buffer itself.
+
+- `MetronomeSettings` clamps the tempo to 20 to 300 bpm and the bar to 1 to 16
+  beats, and a non-finite tempo falls back to 120 rather than to a bound, because
+  NaN says nothing about what the player meant.
+- the settings cross to the render thread through a seqlock over two `UInt64`s
+  using the same `CSync` atomics the effects chain uses, so switching the click on
+  never makes the render block lock or allocate.
+- the click starts on the frame a beat is due, not near it: at 120 bpm and 48 kHz
+  the tests find beats at frames 0, 24000, 48000, 72000 and 96000 exactly, with the
+  downbeat louder than the beats inside the bar.
+- a tempo change does not move the beat already on its way; the interval after it
+  uses the new tempo, so 120 to 60 bpm turns a 24000-frame beat into a 48000-frame
+  one.
+- switching the click off lets the click in flight ring out and schedules nothing
+  more.
+- the click is added after the patch's effect chain, so a patch's delay and reverb
+  never echo the cue, and it never borrows a voice from the instrument.
+
+`Tests/SundayKeysCoreTests/MetronomeTests.swift` measures all of that by rendering
+frames, and `tools/metronome_smoke.sh` covers the step the tests cannot reach: the
+running app's own graph playing the cue. Run [`42824933210`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42824933210) starts the
+bundle, switches the click on at 120 bpm, counts the beats the render thread
+started and finds none after it was switched off. The controls sit in the
+transport row, and nobody has heard it.
+
 
 ## Session scope
 

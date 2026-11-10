@@ -10,6 +10,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var lastEvent = "none"
     @Published private(set) var voiceCount = 0
     @Published private(set) var heldNotes: Set<UInt8> = []
+    ///
+    /// The click is a cue for the whole app rather than part of a patch, so it lives
+    /// here and is never written into the bank: a rehearsal tempo should not travel
+    /// with a sound.
+    @Published private(set) var click = MetronomeSettings()
+    @Published private(set) var clickStatus = "Click off"
+    @Published private(set) var clickCount = 0
 
     /// What the MIDI client currently knows, updated on every start and on every
     /// refresh, so a source appearing or disappearing is reflected without
@@ -97,6 +104,10 @@ final class AppModel: ObservableObject {
         // created read exactly like a machine with no controller. It is recorded
         // now, and the status line the window already shows says which happened.
         applyMIDIVerdict(midi.start())
+        // A click switched on before Start is already what the graph plays, because the
+        // controller keeps the settings across a stop; publishing again here keeps the
+        // window and the graph in step on every start.
+        audio.setMetronome(click)
     }
 
     func stop() {
@@ -105,6 +116,7 @@ final class AppModel: ObservableObject {
         audio.stop()
         midi.stop()
         midiStatusBoard.reset()
+        clickCount = 0
         midiStatus = midiStatusBoard.status
         isEngineRunning = false
         voiceCount = 0
@@ -113,6 +125,25 @@ final class AppModel: ObservableObject {
         engineStatusLine = "Engine stopped"
         statusMessage = engineStatusLine
     }
+
+    /// Switches the click without touching the patch, the bank or a single voice.
+    func toggleClick() {
+        setClick(enabled: !click.enabled)
+    }
+
+    /// Moves one or more of the click's controls. The settings type clamps, so a
+    /// stepper cannot put the tempo outside 20 to 300 bpm or the bar outside 1 to 16
+    /// beats.
+    func setClick(enabled: Bool? = nil, beatsPerMinute: Double? = nil, beatsPerBar: Int? = nil) {
+        click = MetronomeSettings(
+            enabled: enabled ?? click.enabled,
+            beatsPerMinute: beatsPerMinute ?? click.beatsPerMinute,
+            beatsPerBar: beatsPerBar ?? click.beatsPerBar
+        )
+        audio.setMetronome(click)
+        clickStatus = click.enabled ? click.summary : "Click off"
+    }
+
 
     // MARK: - Patches
 
@@ -450,6 +481,7 @@ final class AppModel: ObservableObject {
             Task { @MainActor in
                 guard let self else { return }
                 self.voiceCount = self.audio.activeVoices
+                self.clickCount = self.audio.clickCount
             }
         }
     }

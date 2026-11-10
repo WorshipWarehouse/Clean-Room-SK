@@ -26,6 +26,7 @@ this file tracks state.
 | Build, MIDI connect | the port's connect loop runs on a machine with no hardware: the probe publishes a virtual source, the engine enumerates it, the port connects it and the status says so | `Sources/SundayKeysCore/MIDI/MIDIConnectProbe.swift`, `Sources/SundayKeysApp/MIDI/VirtualMIDISource.swift`, run `42740507134` |
 | Build, session scope | the patch that was playing is remembered beside the bank and resolved at launch with a named fallback, and the set-list head follows it | `Sources/SundayKeysCore/Session/SessionMemory.swift`, run `42819855234` |
 | Build, session relaunch | the bundle is started three times against one folder - the write, the relaunch and a hint naming a deleted patch - and each run's own lines are asserted | `tools/session_smoke.sh`, runs `42821991600` and `42821991761` |
+| Build, click | a tempo clock in the core module and a click the render thread adds after the patch's effects, so a cue is never reverberated and no voice is borrowed | `Sources/SundayKeysCore/Audio/Metronome.swift`, runs `42824933255` and `42824933210` |
 | Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching, audio start planning, MIDI start reporting, MIDI status wording and retention, MIDI source tracking across refreshes | `Tests/SundayKeysCoreTests/` |
 
 This is a working instrument with a working patch system, an original effects chain, a learned
@@ -781,6 +782,56 @@ GitHub App to create or update workflow`. That refusal is in run
 
 What this does not prove: that a person sees the window open on the remembered patch.
 The probe proves the state the window is built from, on a machine with no display.
+
+## Click milestone: a pulse the render thread keeps
+
+The instrument could play a chord but had no pulse: every tempo thought in this
+repository ended at "tempo authority: Unknown", and the next action list was all
+hardware. A player rehearsing without a click has to keep the time themselves, so
+a tempo clock was the next thing that could be built and proved without a
+controller, a window or the unreachable Mac.
+
+- **The clock is core logic.** `Metronome` turns bpm into frames at the graph's
+  own sample rate and starts a click on the frame a beat is due, so a beat is not
+  a timer callback. At 120 bpm and 48 kHz the tests find onsets at frames 0,
+  24000, 48000, 72000 and 96000 exactly, and the downbeat is louder than the
+  beats inside the bar.
+- **Settings cross without a lock.** The whole settings value is published through
+  a seqlock over two `UInt64`s using the `CSync` atomics the effects chain already
+  uses, so switching the click on cannot make the render block lock or allocate.
+- **A tempo change does not move the beat already on its way.** The beat that was
+  due still lands and the interval after it uses the new tempo, which the tests
+  show by turning 120 into 60 bpm on the second beat and finding the third at
+  frame 72000 instead of 48000.
+- **Switching it off is a stop, not a cut.** The click in flight finishes its
+  envelope and nothing is scheduled after it, so the tests find one onset and then
+  exact silence, and the probe waits past the next beat to prove none arrived.
+- **The cue is not part of the patch.** The engine adds the click after the effect
+  chain, so a patch's delay and reverb never echo it, and it never borrows a voice.
+- **Ten cases measure it.** `Tests/SundayKeysCoreTests/MetronomeTests.swift`
+  renders frames and asserts where the sound is: the beat grid, both accents, a bar
+  of three, a silent clock, the tempo change, the stop, the clamps, the bypass and
+  the voice count.
+
+**Observed.** Run [`42824933255`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42824933255) on `f6d2539c`: the build job concluded
+success.
+
+- `Build (debug, with tests)`: success 13:29:31 to 13:29:58 UTC, which compiled
+  `Metronome.swift`, the engine change and `MetronomeTests.swift`.
+- `Test`: success 13:29:58 to 13:30:01 UTC, which ran every suite including the
+  ten click cases.
+- `Build (release)`: success 13:30:01 to 13:30:21 UTC, and `Launch the app`: success
+  13:30:24 to 13:30:32 UTC.
+- `Probe the click` is not a build step: run [`42824933210`](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42824933210) is the click
+  workflow on the same commit, and its `Probe the click` step was success
+  13:30:12 to 13:30:16 UTC. That step only passes after the app prints the
+  click on, at least two beats counted and none after the stop, so it is the
+  running graph rendering the cue rather than a compile.
+
+What this does not prove: that a person has heard it. The probe counts the beats
+the render thread started on the runner's output device; nobody has listened to a
+click, and no window has been looked at.
+
 
 ## Next actions, in order
 

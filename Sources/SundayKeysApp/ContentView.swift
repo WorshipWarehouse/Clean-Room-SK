@@ -33,6 +33,7 @@ struct ContentView: View {
                     .keyboardShortcut(.defaultAction)
 
                     Button("All notes off") { model.panic() }
+                    ClickSection(model: model)
 
                     Text(model.lastEvent)
                         .font(.system(.body, design: .monospaced))
