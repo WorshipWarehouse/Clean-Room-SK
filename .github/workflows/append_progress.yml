@@ -1,0 +1,58 @@
+name: append-progress
+
+# Appends docs/re/progress-append.md to docs/progress.md and pushes it. This exists because
+# docs/progress.md is 110,012 bytes, the contents API replaces whole files, and its reads cap at
+# 50,000 characters, so the append cannot be made through the API. It runs on a Linux runner
+# because the append needs no Xcode, and the macOS pool is the contended resource.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+
+      - name: Append the section
+        run: |
+          set -euo pipefail
+          before=$(wc -c < docs/progress.md)
+          echo "docs/progress.md is $before bytes before the append"
+          if [ "$before" -ne 110012 ]; then
+            echo "docs/progress.md is not the expected 110,012 bytes; refusing to append"
+            exit 1
+          fi
+          if grep -qF '## Step clock and arpeggiator caller milestone' docs/progress.md; then
+            echo "the section is already present; nothing to append"
+            exit 1
+          fi
+          test -s docs/re/progress-append.md
+          printf '\n' >> docs/progress.md
+          cat docs/re/progress-append.md >> docs/progress.md
+          after=$(wc -c < docs/progress.md)
+          echo "docs/progress.md is $after bytes after the append"
+          if [ "$after" -le "$before" ]; then
+            echo "the append did not grow the file; failing"
+            exit 1
+          fi
+          tail -n 5 docs/progress.md
+
+      - name: Commit and push
+        run: |
+          set -euo pipefail
+          git config user.name 'WorshipWarehouse'
+          git config user.email 'worshipwarehousesite@gmail.com'
+          git add docs/progress.md
+          git commit -m "Append the step clock and caller milestone to docs/progress.md
+
+This commit changes documentation only: it appends the milestone section that could not be written
+through the contents API, because docs/progress.md is 110,012 bytes and that API replaces whole
+files while capping reads at 50,000 characters. No source, test or workflow file differs."
+          git push origin HEAD:main
+          echo "pushed $(git rev-parse HEAD)"
