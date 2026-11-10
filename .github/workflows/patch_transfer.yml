@@ -1,0 +1,47 @@
+name: patch-transfer
+
+# Exporting a patch is a file operation performed by the running app, so proving it
+# needs the bundle rather than a unit test. It lives in its own workflow for the reason
+# click.yml and session.yml do: a workflow's own token may delete a file under
+# .github/workflows but may not create or update one, so a step cannot be added to
+# build.yml from a runner. A probe that never runs proves nothing, so the proof gets a
+# workflow of its own, authored here rather than patched there.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: patch-transfer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report the toolchain
+        run: |
+          set -o pipefail
+          swift --version
+
+      # The probe starts the bundle, so it needs the bundle the release build produces.
+      - name: Build (release)
+        run: |
+          set -o pipefail
+          swift build -c release
+
+      - name: Bundle the app
+        run: |
+          set -o pipefail
+          bash tools/bundle_app.sh
+
+      - name: Probe the patch transfer
+        run: |
+          set -o pipefail
+          bash tools/patch_transfer_smoke.sh
