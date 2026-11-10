@@ -8,9 +8,10 @@ import SundayKeysCore
 /// A GUI app prints nothing by default, so a process that is merely alive proves
 /// only that the loader resolved its symbols. These markers record the points
 /// that matter — AppKit finishing launch, SwiftUI installing the root view, the
-/// audio graph starting and rendering, and the MIDI client being created and its
-/// sources enumerated — so `tools/launch_smoke.sh`, `tools/audio_smoke.sh` and
-/// `tools/midi_smoke.sh` can assert them instead of guessing from a process id.
+/// audio graph starting and rendering, and the MIDI client being created, its
+/// sources enumerated, a source connected and packets received through it — so
+/// `tools/launch_smoke.sh`, `tools/audio_smoke.sh` and `tools/midi_smoke.sh` can
+/// assert them instead of guessing from a process id.
 ///
 /// Every probe is driven by an environment variable, so a player launching the
 /// app normally sees none of this:
@@ -28,11 +29,14 @@ import SundayKeysCore
 ///   created and every online source connected — a zero-source list is a fact
 ///   about the machine, not a failure — 4 no client, 5 no port, 6 a source that
 ///   would not connect.
-/// - `SUNDAYKEYS_PROBE_MIDI_CONNECT=1` publishes a virtual CoreMIDI source and
-///   then runs the same start, so the engine's own enumeration finds a source and
-///   the connect path runs on a machine with no controller. 0 the port connected
-///   it, 7 the system would not publish it, 8 the engine never listed it, 9 it was
-///   listed but never attempted, plus the 4, 5 and 6 above.
+/// - `SUNDAYKEYS_PROBE_MIDI_CONNECT=1` publishes a virtual CoreMIDI source, runs
+///   the same start, then emits a note on, a note off and a control change from
+///   that source and reports what the app's own input block parsed, so the
+///   receive path runs on a machine with no controller. 0 the port connected the
+///   source and every packet came back parsed, 7 the system would not publish it,
+///   8 the engine never listed it, 9 it was listed but never attempted, 10 no
+///   note off, 11 no control change, 12 nothing at all, 13 no note on, plus the
+///   4, 5 and 6 above.
 @MainActor
 enum LaunchProbe {
     private static let marker = "SundayKeysApp"
@@ -148,13 +152,16 @@ enum LaunchProbe {
     }
 
     /// Publishes a source of the probe's own, starts the same client the Start
-    /// button starts, and exits with what that proved.
+    /// button starts, sends three packets from that source and reports what the
+    /// app's own input path made of them.
     ///
     /// The connect loop had never run anywhere, because no machine in this
     /// workflow has a controller. A virtual source is a real endpoint the system
     /// publishes, so the port's connect takes the same call a device would, and
     /// the status printed here is derived from the engine's own enumeration rather
-    /// than from the probe's assumption about it.
+    /// than from the probe's assumption about it. Sending through `MIDIReceived`
+    /// then puts real packets on that endpoint, so `MIDIMessage.parse` runs on
+    /// bytes CoreMIDI delivered rather than on an array built for the test.
     static func probeMIDIConnectIfRequested() {
         guard let raw = ProcessInfo.processInfo.environment["SUNDAYKEYS_PROBE_MIDI_CONNECT"],
               raw != "0",
@@ -164,9 +171,14 @@ enum LaunchProbe {
         report("MIDI connect probe starting")
         let virtualSource = VirtualMIDISource()
 
+        // The input block runs on a CoreMIDI thread, so what arrives is collected
+        // there and read here once the sends are done.
+        let collector = MIDIMessageCollector()
+
         // Created first, so the engine's own first enumeration already has a
         // source to connect instead of an empty list.
         let service = MIDIInputService()
+        service.onMessage = { collector.record($0) }
         var verdict = service.start()
 
         // A source the system has just accepted is normally listed at once. If the
@@ -187,10 +199,47 @@ enum LaunchProbe {
             report(line)
         }
 
+        // Only a connected port is worth sending to. When the connect did not
+        // prove itself, nothing is sent and the receive probe says exactly that, so
+        // the evidence cannot be invented from a send that went nowhere.
+        let expectation = MIDIReceiveExpectation()
+        if probe.provesConnectPath {
+            for packet in expectation.packets {
+                let status = virtualSource.send(packet: packet)
+                report("MIDI receive probe: send status \(status)")
+            }
+
+            // CoreMIDI delivers on its own thread, so wait for the three packets to
+            // be collected rather than assuming they arrived before the next line.
+            let deadline = Date().addingTimeInterval(2)
+            while collector.count < expectation.packets.count && Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.02)
+            }
+        }
+
+        // The same router the engine reaches through `AudioEngineController`, over
+        // the patch the app opens with, so the received note is routed by the code
+        // that routes a key press.
+        let routed = probe.provesConnectPath
+            ? LayerRouter(layers: Patch.starter.layers)
+                .route(note: expectation.note, velocityGain: Float(expectation.velocity) / 127)
+            : []
+
+        let receive = MIDIReceiveProbe(
+            expectation: expectation,
+            connect: probe,
+            received: collector.messages,
+            routedLayers: probe.provesConnectPath ? routed.count : nil,
+            enabledLayers: probe.provesConnectPath ? Patch.starter.layers.filter(\.enabled).count : nil
+        )
+        for line in receive.lines {
+            report(line)
+        }
+
         service.stop()
         virtualSource.dispose()
         report("MIDI connect probe disposed its client and its source")
-        exit(probe.exitCode)
+        exit(receive.exitCode)
     }
 }
 
