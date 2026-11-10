@@ -18,6 +18,18 @@ final class AppModel: ObservableObject {
     @Published private(set) var clickStatus = "Click off"
     @Published private(set) var clickCount = 0
 
+    /// The arpeggiator's panel state. The panel is the one object the section's
+    /// controls reach; these mirrors are what make a toggle redraw the window, so
+    /// the section never shows state the service does not hold. Latch lives in
+    /// that same panel, which is why the toggle and the status line cannot
+    /// disagree.
+    @Published private(set) var arpeggiatorEnabled = false
+    @Published private(set) var arpeggiatorLatched = false
+    @Published private(set) var arpeggiatorBeatsPerMinute = 120.0
+    @Published private(set) var arpeggiatorDivision = StepDivision.eighth
+    @Published private(set) var arpeggiatorStatus =
+        "Arp off, latch off, 120 bpm, eighth"
+
     /// What the MIDI client currently knows, updated on every start and on every
     /// refresh, so a source appearing or disappearing is reflected without
     /// pressing Start again. Retained in `midiStatusBoard` so a refusal is a
@@ -45,10 +57,22 @@ final class AppModel: ObservableObject {
     /// so the bank format does not move and an unreadable hint can never stop the
     /// bank from loading.
     private let sessionStore = SessionStore(url: SessionStore.defaultURL())
+    /// The arpeggiator's state and rules, behind the one panel the window binds
+    /// to. Its notes leave through the same engine the keys do, so a stepped
+    /// pattern would reach the voices a hand-played note reaches.
+    private let arpeggiator: ArpeggiatorPanel
     private var meter: Timer?
 
     init() {
+        // Built before the bank is read, because the panel owns its own service
+        // and nothing in it depends on a patch. Every later change goes through
+        // it, so the window and the service hold one value.
+        arpeggiator = ArpeggiatorPanel(
+            clock: SystemHostClock(),
+            target: audio
+        )
         loadBank()
+        publishArpeggiator()
     }
 
     /// The patch being edited and played. Falls back to the first stored patch so a
@@ -113,6 +137,8 @@ final class AppModel: ObservableObject {
     func stop() {
         meter?.invalidate()
         meter = nil
+        arpeggiator.allNotesOff()
+        publishArpeggiator()
         audio.stop()
         midi.stop()
         midiStatusBoard.reset()
@@ -352,6 +378,51 @@ final class AppModel: ObservableObject {
     func clearBinding(_ target: ControllerTarget) {
         updateSelectedPatch(appliesToEngine: false) { $0.controllerMapping.unbind(target) }
         bankStatus = "Unbound \(target.label), not saved yet"
+    }
+
+
+    // MARK: - Arpeggiator
+
+    /// The section's controls all land here, on the same panel the latch toggle
+    /// uses. Each one republishes the mirrors after the service has taken the
+    /// change, so no control can leave the window showing state the service does
+    /// not hold.
+    func setArpeggiatorEnabled(_ enabled: Bool) {
+        arpeggiator.setEnabled(enabled)
+        publishArpeggiator()
+    }
+
+    /// The latch toggle's setter. It reaches the service through the panel, which
+    /// is the same path on, tempo and division take.
+    func setArpeggiatorLatched(_ latched: Bool) {
+        arpeggiator.setLatched(latched)
+        publishArpeggiator()
+    }
+
+    func toggleArpeggiatorLatch() {
+        arpeggiator.toggleLatch()
+        publishArpeggiator()
+    }
+
+    func setArpeggiatorBeatsPerMinute(_ value: Double) {
+        arpeggiator.setBeatsPerMinute(value)
+        publishArpeggiator()
+    }
+
+    func setArpeggiatorDivision(_ value: StepDivision) {
+        arpeggiator.setDivision(value)
+        publishArpeggiator()
+    }
+
+    /// Copies the panel's state into the published mirrors. It reads the service
+    /// through the panel rather than reconstructing the words here, so the status
+    /// line the window shows is the panel's own.
+    private func publishArpeggiator() {
+        arpeggiatorEnabled = arpeggiator.isEnabled
+        arpeggiatorLatched = arpeggiator.isLatched
+        arpeggiatorBeatsPerMinute = arpeggiator.beatsPerMinute
+        arpeggiatorDivision = arpeggiator.division
+        arpeggiatorStatus = arpeggiator.statusLine
     }
 
 
