@@ -47,17 +47,28 @@ jobs:
           fi
           echo "strict-concurrency=complete was passed to the compiler"
 
-      # Everything is reported, including the backlog this job does not yet
-      # gate on, so the count is visible rather than hidden.
+      # Only a primary diagnostic line (path:line:column: warning:) carries the
+      # file, so those are what get reported and what the gate inspects.
+      # Continuation lines are source snippets and would report no location.
       - name: Report every concurrency diagnostic
         run: |
           set -o pipefail
-          total=$(grep -cE "(warning|error):" /tmp/strict.log || true)
+          primary='^/.*\\.swift:[0-9]+:[0-9]+: (warning|error):'
+          total=$(grep -cE "$primary" /tmp/strict.log || true)
           echo "diagnostics in the strict build: ${total:-0}"
-          { grep -E "(warning|error):" /tmp/strict.log || true; } \
-            | sort -u | head -n 40 | while IFS= read -r line; do
-              echo "::warning::$line"
-            done
+          grep -E "$primary" /tmp/strict.log \
+            | sed -E "s#^${PWD}/##" \
+            | sort -u \
+            | cut -d: -f1 \
+            | uniq -c \
+            | sort -rn
+          grep -E "$primary" /tmp/strict.log \
+            | sed -E "s#^${PWD}/##" \
+            | sort -u \
+            | while IFS= read -r line; do
+                file=${line%%:*}
+                echo "::warning file=${file}::${line#*: }"
+              done
 
       # The MIDI routing seam is gated: the transport protocol, its router, the
       # app model that conforms to it and the suite that exercises it. A new
@@ -66,7 +77,7 @@ jobs:
         run: |
           set -o pipefail
           seam='Sources/SundayKeysCore/MIDI/|Sources/SundayKeysApp/AppModel.swift|Tests/SundayKeysCoreTests/MIDIEventRoutingTests.swift'
-          if grep -E "(warning|error):" /tmp/strict.log | grep -E "$seam"; then
+          if grep -E '^/.*\.swift:[0-9]+:[0-9]+: (warning|error):' /tmp/strict.log | grep -E "$seam"; then
             echo "::error::strict concurrency diagnostics in the MIDI routing seam"
             exit 1
           fi
