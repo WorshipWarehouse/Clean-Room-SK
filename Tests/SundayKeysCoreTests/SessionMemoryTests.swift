@@ -89,7 +89,11 @@ final class SessionMemoryTests: XCTestCase {
         XCTAssertEqual(memory, SessionMemory(lastPatchID: a.id))
     }
 
+    /// A corrupt hint has to read exactly like a first launch, which means resolving it
+    /// against the same patch the first launch would see. Building a second patch for the
+    /// comparison would mint a fresh random id and could never be equal to the first.
     func testAFileThatCannotBeReadIsTreatedAsNothingRemembered() throws {
+        let a = patch("A")
         let store = temporaryStore()
         try FileManager.default.createDirectory(
             at: store.url.deletingLastPathComponent(),
@@ -99,8 +103,10 @@ final class SessionMemoryTests: XCTestCase {
 
         XCTAssertNil(store.load(), "a corrupt hint costs the resume and nothing else")
 
-        let shown = SessionScope.restore(memory: store.load(), patches: [patch("A")])
-        XCTAssertEqual(shown.patchID, SessionScope.restore(memory: nil, patches: [patch("A")]).patchID)
+        let shown = SessionScope.restore(memory: store.load(), patches: [a])
+        let firstLaunch = SessionScope.restore(memory: nil, patches: [a])
+        XCTAssertEqual(shown.patchID, firstLaunch.patchID)
+        XCTAssertEqual(shown, firstLaunch, "a corrupt file must read exactly like a first launch")
     }
 
     func testTheSessionFileSitsBesideTheBank() {
