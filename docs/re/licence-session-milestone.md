@@ -90,19 +90,33 @@ it, which is why each rule is asserted with an exact `line` and an exact `access
 - entitlement gating at 0, at the maximum, above it and at a negative index;
 - `SessionGate.standing` combining licence and entitlements on a real payload.
 
-## Not done here, and deliberately not claimed
+## Verification - actual runs
 
-- **No network client.** Nothing in this repository calls `/api/v1/auth/session`; there is no host,
-  token, or credential in the tree. `SessionDocument.decode` is fed bytes by a test only.
-- **No window wiring.** `AppModel` does not read a standing yet, so nothing about the UI is
-  verified. The app has still never been seen by a person.
-- **Still Unknown:** JSON key casing and date strategy (mitigated by accepting both, not resolved),
-  the grace-period duration, server-side entitlement rules, whether licence state is signed, and
-  token shapes beyond `accessToken` / `refreshToken` / `expiresIn`.
+All five workflows were push-triggered on `a685a6fafb24833836932288de7118185166efff` and each reads
+`status: completed`. Every step below reads `success`.
+
+| workflow | run | result |
+| --- | --- | --- |
+| build | 42902511691 | resolve, debug build with tests, Test, release build, bundle, launch, audio probe, MIDI probe, bootstrap verification |
+| click | 42902511374 | release build, bundle, click probe |
+| patch-transfer | 42902511396 | release build, bundle, patch-transfer probe |
+| session | 42902511514 | release build, bundle, session-resume probe |
+| concurrency | 42902511453 | strict build, flag proof, diagnostic report, MIDI-seam gate |
+
+The build's `Test` step ran 21:11:30 to 21:11:33 UTC on that head and passed, so the assertions
+listed above are machine-verified rather than asserted by hand.
+
+First attempt at this milestone, commit `18d8669f` (build run `42901973653`, concurrency run
+`42901973839`), failed to compile with `error: invalid redeclaration of 'SessionScope'` at
+`SessionMemory.swift:125`. The new type was renamed to `SessionGate` in `a685a6f`; the existing
+`SessionScope` was not touched, so launch-restore behaviour is unchanged. The runs above are the
+ones that prove the renamed code.
+
+What these runs do not prove: anything needing a person, real MIDI hardware or an audio device.
+The session decoder is exercised by its unit tests only - no code path in the app calls it yet.
 
 ## Record
 
 `docs/progress.md` is 157 KB and cannot be appended from here in one write; this companion is the
-hand-written record for this milestone, per the practice in the repository skill. The CI runs that
-verified it are reported in the conversation and, when the append machinery next runs, they belong
-in `docs/progress.md` with the run ids and per-job results.
+hand-written record for this milestone, per the practice in the repository skill. The run table
+above is what belongs in `docs/progress.md` when the append machinery next runs.
