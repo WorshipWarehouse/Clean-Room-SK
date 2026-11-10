@@ -15,6 +15,10 @@ struct SundayKeysApp: App {
                     // With the variable unset this returns at once, so a player's launch is
                     // unchanged.
                     SessionProbe.probeSessionIfRequested()
+                    // The click probe runs here for the same reason: the graph it starts is
+                    // the one the Start button builds, and with the variable unset it does
+                    // nothing at all.
+                    MetronomeProbe.probeIfRequested()
                 }
         }
     }
