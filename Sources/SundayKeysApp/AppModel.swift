@@ -11,11 +11,15 @@ final class AppModel: ObservableObject {
     @Published private(set) var voiceCount = 0
     @Published private(set) var heldNotes: Set<UInt8> = []
 
-    /// What the MIDI start last did. Published so the view layer has something to
-    /// read, and retained in `midiStatusBoard` so a refusal is a piece of state
-    /// rather than a value that is read once and forgotten.
+    /// What the MIDI client currently knows, updated on every start and on every
+    /// refresh, so a source appearing or disappearing is reflected without
+    /// pressing Start again. Retained in `midiStatusBoard` so a refusal is a
+    /// piece of state rather than a value that is read once and forgotten.
     @Published private(set) var midiStatus = MIDIStatus.notStarted
     private var midiStatusBoard = MIDIStatusBoard()
+    /// The engine's own line, kept apart from the MIDI status so a refresh can
+    /// rebuild the message instead of appending to an already appended one.
+    private var engineStatusLine = "Engine stopped"
 
     /// The whole bank the player switches between, and which patch of it is
     /// selected. This lives here rather than in the audio controller because the
@@ -71,6 +75,7 @@ final class AppModel: ObservableObject {
                 statusMessage = "Engine failed: \(error.localizedDescription)"
             }
         }
+        engineStatusLine = statusMessage
 
         midi.onMessage = { [weak self] message in
             Task { @MainActor in self?.handle(message) }
@@ -78,14 +83,16 @@ final class AppModel: ObservableObject {
         midi.onSourcesChanged = { [weak self] names in
             Task { @MainActor in self?.midiSources = names }
         }
+        // The service reports on the first start and on every later refresh, so a
+        // controller plugged in while the app runs moves the status with it.
+        midi.onVerdictChanged = { [weak self] verdict in
+            Task { @MainActor in self?.applyMIDIVerdict(verdict) }
+        }
 
         // The verdict used to be discarded here, so a client that could not be
         // created read exactly like a machine with no controller. It is recorded
         // now, and the status line the window already shows says which happened.
-        let engineLine = statusMessage
-        midiStatusBoard.record(midi.start())
-        midiStatus = midiStatusBoard.status
-        statusMessage = midiStatus.message(base: engineLine)
+        applyMIDIVerdict(midi.start())
     }
 
     func stop() {
@@ -99,7 +106,8 @@ final class AppModel: ObservableObject {
         voiceCount = 0
         heldNotes.removeAll()
         learningTarget = nil
-        statusMessage = "Engine stopped"
+        engineStatusLine = "Engine stopped"
+        statusMessage = engineStatusLine
     }
 
     // MARK: - Patches
@@ -331,7 +339,7 @@ final class AppModel: ObservableObject {
             bank.setlist.prune(keeping: Set(bank.patches.map { $0.id }))
             selectedPatchID = first.id
             audio.setPatch(patch)
-            bankStatus = "Loaded \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es") and \(bank.setlist.entries.count) set list slot\(bank.setlist.entries.count == 1 ? "" : "s")"
+            bankStatus = "Loaded \(loaded.patches.count) patch\(loaded.patches.count == 1 ? "" : "es") and \(loaded.setlist.entries.count) set list slot\(loaded.setlist.entries.count == 1 ? "" : "s")"
         } catch {
             bankStatus = "Could not read the bank: \(error.localizedDescription)"
             audio.setPatch(patch)
@@ -379,6 +387,15 @@ final class AppModel: ObservableObject {
             counter += 1
         }
         return candidate
+    }
+
+    /// Records a verdict from the service and republishes the status message
+    /// against the engine line, so a refresh replaces the MIDI part of the message
+    /// instead of appending to it.
+    private func applyMIDIVerdict(_ verdict: MIDIStartVerdict) {
+        midiStatusBoard.record(verdict)
+        midiStatus = midiStatusBoard.status
+        statusMessage = midiStatus.message(base: engineStatusLine)
     }
 
     // MARK: - Playing surface

@@ -65,7 +65,7 @@ final class MIDIStatusTests: XCTestCase {
     }
 
     func testARefusedConnectKeepsItsReasonAndItsStatus() {
-        let failure = MIDIStartFailure.connectionFailed(sourceName: "Keystation 61", status: -10830)
+        let failure = MIDIStartFailure.connectionFailed(sourceID: 1, sourceName: "Keystation 61", status: -10830)
         let status = MIDIStatus(verdict: verdict(
             connected: [],
             sources: [source(1, name: "Keystation 61")],
@@ -108,7 +108,7 @@ final class MIDIStatusTests: XCTestCase {
             MIDIStatus.degraded(
                 connected: 0,
                 available: 1,
-                failure: .connectionFailed(sourceName: "A", status: -50)
+                failure: .connectionFailed(sourceID: 1, sourceName: "A", status: -50)
             ).text,
         ]
 
@@ -156,8 +156,8 @@ final class MIDIStatusTests: XCTestCase {
     }
 
     func testTheFirstRefusedConnectIsTheOneShown() {
-        let first = MIDIStartFailure.connectionFailed(sourceName: "A", status: -1)
-        let second = MIDIStartFailure.connectionFailed(sourceName: "B", status: -2)
+        let first = MIDIStartFailure.connectionFailed(sourceID: 1, sourceName: "A", status: -1)
+        let second = MIDIStartFailure.connectionFailed(sourceID: 2, sourceName: "B", status: -2)
         let status = MIDIStatus(verdict: verdict(
             connected: [],
             sources: [source(1, name: "A"), source(2, name: "B")],

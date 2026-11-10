@@ -12,15 +12,22 @@ import SundayKeysCore
 ///
 /// `start()` reports what happened instead of failing silently. A client that
 /// could not be created and a machine with no controller used to look identical
-/// from the outside — both just left the source list empty — and telling those
+/// from the outside - both just left the source list empty - and telling those
 /// apart is the whole point of `tools/midi_smoke.sh`.
+///
+/// What the port holds and what it refused is tracked by `MIDISourceTracker` in
+/// the core module, so a refresh after a source appears or disappears follows the
+/// same rules as the first start. This type only performs the calls.
 final class MIDIInputService {
     var onMessage: ((MIDIMessage) -> Void)?
     var onSourcesChanged: (([String]) -> Void)?
+    /// Called for the first start and for every later refresh, so the owner's
+    /// status follows the actual source list rather than only what Start found.
+    var onVerdictChanged: ((MIDIStartVerdict) -> Void)?
 
     private var client = MIDIClientRef()
     private var inputPort = MIDIPortRef()
-    private var connectedSources: [MIDIEndpointRef] = []
+    private var tracker = MIDISourceTracker()
     private var started = false
 
     /// The verdict of the last start or refresh, so a caller that only wants to
@@ -53,15 +60,15 @@ final class MIDIInputService {
         }
 
         started = true
-        return record(publish(connectCurrentSources()))
+        return record(publish(enumerateAndConnect()))
     }
 
     func stop() {
         guard started else { return }
-        for source in connectedSources {
+        for source in tracker.connectedEndpoints {
             MIDIPortDisconnectSource(inputPort, source)
         }
-        connectedSources.removeAll()
+        tracker = MIDISourceTracker()
         MIDIPortDispose(inputPort)
         MIDIClientDispose(client)
         inputPort = MIDIPortRef()
@@ -71,36 +78,37 @@ final class MIDIInputService {
         onSourcesChanged?([])
     }
 
+    /// The notify block lands here, and so does anything else that wants the
+    /// current list. It is a thin pass over the tracker's rules.
     private func refreshSources() {
         guard started else { return }
-        lastVerdict = publish(connectCurrentSources())
+        lastVerdict = publish(enumerateAndConnect())
     }
 
-    /// Enumerates the sources, connects the online ones the port does not hold
-    /// yet, and describes the result.
-    private func connectCurrentSources() -> MIDIStartVerdict {
+    /// Enumerates the sources, asks the tracker which endpoints still need a
+    /// connect, performs exactly those, then reports what the port holds.
+    private func enumerateAndConnect() -> MIDIStartVerdict {
         let inventory = MIDIInventory(sources: MIDIEndpointReader.currentSources())
-        var failures: [MIDIStartFailure] = []
 
-        for source in inventory.online where !connectedSources.contains(source.endpoint) {
-            let status = MIDIPortConnectSource(inputPort, source.endpoint, nil)
+        for endpoint in tracker.endpointsToConnect(in: inventory) {
+            let name = inventory.sources.first { $0.endpoint == endpoint }?.displayName ?? "unnamed source"
+            let status = MIDIPortConnectSource(inputPort, endpoint, nil)
             if status == noErr {
-                connectedSources.append(source.endpoint)
+                tracker.recordConnected(endpoint: endpoint)
             } else {
-                failures.append(.connectionFailed(sourceName: source.displayName, status: status))
+                tracker.recordRefused(endpoint: endpoint, name: name, status: status)
             }
         }
 
-        let connectedIDs = inventory.online
-            .filter { connectedSources.contains($0.endpoint) }
-            .map(\.uniqueID)
-
-        return .running(MIDIStartReport(inventory: inventory, connected: connectedIDs, failures: failures))
+        tracker.prune(keeping: inventory)
+        return .running(tracker.report(for: inventory))
     }
 
-    /// Tells the observer the source names, and hands the verdict back unchanged.
+    /// Tells the observers the source names and the verdict, and hands the verdict
+    /// back unchanged.
     private func publish(_ verdict: MIDIStartVerdict) -> MIDIStartVerdict {
         onSourcesChanged?(verdict.report?.inventory.sources.map(\.displayName) ?? [])
+        onVerdictChanged?(verdict)
         return verdict
     }
 

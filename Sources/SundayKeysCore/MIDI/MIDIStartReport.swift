@@ -3,8 +3,8 @@ import Foundation
 /// What one CoreMIDI source looks like, in a form that can be tested without
 /// CoreMIDI being present.
 ///
-/// The reader in the app target fills these in. Everything below it — the
-/// summary, the per-source line and the exit status — is pure, so the probe's
+/// The reader in the app target fills these in. Everything below it - the
+/// summary, the per-source line and the exit status - is pure, so the probe's
 /// verdict is asserted by unit tests rather than only by whatever hardware a
 /// runner happens to have.
 public struct MIDIEndpointDescription: Equatable, Sendable {
@@ -92,10 +92,14 @@ public struct MIDIInventory: Equatable, Sendable {
 
 /// Why the MIDI start could not finish, and the exit status that says which part
 /// failed.
+///
+/// A refused connect carries the endpoint it was refused for, not only the name
+/// it was shown under. Without that, a later refresh could not tell a refusal
+/// that still applies from one about a source that has since gone or connected.
 public enum MIDIStartFailure: Error, Equatable, Sendable {
     case clientCreationFailed(status: Int32)
     case inputPortCreationFailed(status: Int32)
-    case connectionFailed(sourceName: String, status: Int32)
+    case connectionFailed(sourceID: UInt32, sourceName: String, status: Int32)
 
     public var description: String {
         switch self {
@@ -103,9 +107,15 @@ public enum MIDIStartFailure: Error, Equatable, Sendable {
             return "MIDIClientCreate failed with status \(status)"
         case .inputPortCreationFailed(let status):
             return "MIDIInputPortCreate failed with status \(status)"
-        case .connectionFailed(let name, let status):
+        case let .connectionFailed(_, name, status):
             return "could not connect source \"\(name)\" (status \(status))"
         }
+    }
+
+    /// The endpoint a refused connect was about, when this is a refused connect.
+    public var sourceID: UInt32? {
+        if case let .connectionFailed(id, _, _) = self { return id }
+        return nil
     }
 
     /// 4 the client was never created, 5 the client exists but no input port, 6 a

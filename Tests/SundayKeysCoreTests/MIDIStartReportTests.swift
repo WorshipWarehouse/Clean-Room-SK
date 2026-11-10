@@ -53,7 +53,6 @@ final class MIDIStartReportTests: XCTestCase {
 
     func testAnEmptyInventoryReportsZeroSourcesAndStillSucceeds() {
         let report = MIDIStartReport(inventory: MIDIInventory(sources: []), connected: [], failures: [])
-
         XCTAssertEqual(report.inventory.summaryLine, "MIDI: 0 source(s): 0 online, 0 offline")
         XCTAssertEqual(report.lines, [
             "MIDI: client created",
@@ -96,13 +95,19 @@ final class MIDIStartReportTests: XCTestCase {
         let inventory = MIDIInventory(sources: [
             source(endpoint: 1, uniqueID: 1, name: "Keystation 61", manufacturer: "M-Audio"),
         ])
-        let failure = MIDIStartFailure.connectionFailed(sourceName: "Keystation 61", status: -10830)
+        let failure = MIDIStartFailure.connectionFailed(sourceID: 1, sourceName: "Keystation 61", status: -10830)
         let report = MIDIStartReport(inventory: inventory, connected: [], failures: [failure])
 
         XCTAssertFalse(report.isClean)
         XCTAssertTrue(report.lines.contains("MIDI: could not connect source \"Keystation 61\" (status -10830)"))
         XCTAssertEqual(MIDIStartVerdict.running(report).exitCode, 6)
         XCTAssertEqual(failure.exitCode, 6)
+        XCTAssertEqual(failure.sourceID, 1)
+    }
+
+    func testACreationFailureHasNoSource() {
+        XCTAssertNil(MIDIStartFailure.clientCreationFailed(status: -50).sourceID)
+        XCTAssertNil(MIDIStartFailure.inputPortCreationFailed(status: -50).sourceID)
     }
 
     func testAMissingClientExitsFourAndSaysWhichCallFailed() {

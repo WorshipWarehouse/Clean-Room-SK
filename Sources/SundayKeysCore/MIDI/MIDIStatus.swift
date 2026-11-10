@@ -75,7 +75,9 @@ public enum MIDIStatus: Equatable, Sendable {
 /// The service returns a verdict to whoever started it, and the app model is that
 /// caller. Keeping the last one here means the outcome is a piece of state rather
 /// than a value that gets read for one expression and forgotten, which is exactly
-/// how the refusal used to disappear.
+/// how the refusal used to disappear. A refresh goes through the same derivation
+/// as a start, so the text cannot drift between "pressed Start" and "a controller
+/// was just plugged in".
 public struct MIDIStatusBoard: Equatable, Sendable {
     public private(set) var status: MIDIStatus
 
@@ -89,6 +91,15 @@ public struct MIDIStatusBoard: Equatable, Sendable {
     public mutating func record(_ verdict: MIDIStartVerdict) -> MIDIStatus {
         status = MIDIStatus(verdict: verdict)
         return status
+    }
+
+    /// Applies a report from the client that is already running, which is what a
+    /// source appearing or disappearing produces. It is the same derivation as a
+    /// start, so the status follows the actual source list for as long as the
+    /// client lives.
+    @discardableResult
+    public mutating func refresh(with report: MIDIStartReport) -> MIDIStatus {
+        record(.running(report))
     }
 
     public mutating func reset() {
