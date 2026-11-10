@@ -5,10 +5,13 @@ name: record-click
 # anchor it patches, so a red run or a moved anchor fails the job instead of
 # writing a guess, and nothing is committed unless swift build passes first.
 #
-# Every python step turns errexit off first: the runner's default shell is bash -e,
-# so a failing command would abort the step before the log could be re-emitted as
-# annotations, which is exactly what happened on the first two attempts and made
-# them silent. Each step decides its own exit status at the end instead.
+# Two things learned from the earlier attempts, both silent failures:
+#   * actions does not export GITHUB_TOKEN as an environment variable, only the
+#     github.token context, so it has to be mapped into env explicitly or the
+#     script dies immediately with KeyError.
+#   * the default shell is bash -e, so a failing command aborts the step before
+#     the log can be re-emitted as annotations; each python step turns errexit
+#     off and decides its own exit status at the end.
 on:
   workflow_dispatch:
     inputs:
@@ -33,6 +36,7 @@ jobs:
 
       - name: Record the milestone
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.build_run_id || '42824933255' }}
           CLICK_RUN_ID: ${{ inputs.click_run_id || '42824933210' }}
         run: |
@@ -62,6 +66,8 @@ jobs:
           exit "$status"
 
       - name: Commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set +e
           set -o pipefail
