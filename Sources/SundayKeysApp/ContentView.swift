@@ -6,59 +6,66 @@ struct ContentView: View {
     @ObservedObject var model: AppModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Sunday Keys")
-                    .font(.largeTitle.bold())
-                Spacer()
-                Text("voices \(model.voiceCount)")
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-
-            Text(model.statusMessage)
-                .foregroundStyle(.secondary)
-
-            HStack(spacing: 12) {
-                Button(model.isEngineRunning ? "Stop" : "Start") {
-                    if model.isEngineRunning {
-                        model.stop()
-                    } else {
-                        model.start()
-                    }
-                }
-                .keyboardShortcut(.defaultAction)
-
-                Button("All notes off") { model.panic() }
-
-                Text(model.lastEvent)
-                    .font(.system(.body, design: .monospaced))
-            }
-
-            patchSection
-
-            effectsSection
-
-            ControllerSection(model: model)
-
-            KeyboardView(model: model)
-                .frame(height: 150)
-
-            GroupBox("MIDI inputs") {
-                if model.midiSources.isEmpty {
-                    Text("No MIDI sources detected")
+        // Scrolls because the window carries five panels: without it a shorter display
+        // would hide the keyboard or the controller list with no way to reach them.
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("Sunday Keys")
+                        .font(.largeTitle.bold())
+                    Spacer()
+                    Text("voices \(model.voiceCount)")
+                        .font(.system(.body, design: .monospaced))
                         .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.midiSources, id: \.self) { name in
-                        Text(name)
+                }
+
+                Text(model.statusMessage)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    Button(model.isEngineRunning ? "Stop" : "Start") {
+                        if model.isEngineRunning {
+                            model.stop()
+                        } else {
+                            model.start()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+
+                    Button("All notes off") { model.panic() }
+
+                    Text(model.lastEvent)
+                        .font(.system(.body, design: .monospaced))
+                }
+
+                patchSection
+
+                SetlistSection(model: model)
+
+                effectsSection
+
+                ControllerSection(model: model)
+
+                KeyboardView(model: model)
+                    .frame(height: 150)
+
+                GroupBox("MIDI inputs") {
+                    if model.midiSources.isEmpty {
+                        Text("No MIDI sources detected")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.midiSources, id: \.self) { name in
+                            Text(name)
+                        }
                     }
                 }
-            }
 
-            Spacer()
+                Spacer()
+            }
+            .padding(24)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .padding(24)
-        .frame(minWidth: 900, minHeight: 900)
+        .frame(minWidth: 940, minHeight: 720)
     }
 
     private var patchSection: some View {
@@ -303,6 +310,88 @@ struct ContentView: View {
             Text(String(format: "%.2f", model.patch.effects.reverb.decay))
                 .font(.system(.caption, design: .monospaced))
                 .frame(width: 42, alignment: .trailing)
+        }
+    }
+}
+
+/// The ordered list the player walks through a service, driven by the bank's own set
+/// list so the panel and the tests are looking at the same model.
+struct SetlistSection: View {
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        GroupBox("Set list") {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 8) {
+                    Button("Prev") { model.stepSetlist(by: -1) }
+                    Button("Next") { model.stepSetlist(by: 1) }
+                    Button("Add patch") { model.addCurrentPatchToSetlist() }
+                    Button("Fill from bank") { model.buildSetlistFromBank() }
+
+                    Text(positionText)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+
+                if model.setlist.entries.isEmpty {
+                    Text("No set list yet: Prev and Next walk the bank in order, and Fill from bank copies that order into a list.")
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(Array(model.setlist.entries.enumerated()), id: \.element.id) { index, entry in
+                        SetlistRow(position: index, entry: entry, model: model)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.vertical, 4)
+        }
+    }
+
+    private var positionText: String {
+        if model.setlist.entries.isEmpty {
+            return "bank order"
+        }
+        guard let index = model.setlist.currentIndex, let entry = model.setlist.currentEntry else {
+            return "no slot selected"
+        }
+        return "slot \(index + 1) of \(model.setlist.entries.count): \(model.patchName(forEntry: entry))"
+    }
+}
+
+struct SetlistRow: View {
+    let position: Int
+    let entry: SetlistEntry
+    @ObservedObject var model: AppModel
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(String(position + 1))
+                .frame(width: 22, alignment: .trailing)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+
+            Text(model.patchName(forEntry: entry))
+                .frame(width: 190, alignment: .leading)
+                .font(.system(.callout, design: .monospaced))
+                .foregroundStyle(model.isCurrent(entry) ? Color.primary : Color.secondary)
+
+            if model.isCurrent(entry) {
+                Text("now")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.orange)
+            }
+
+            Button("Play") { model.playSetlistEntry(entry) }
+            Button("Up") { model.moveSetlistEntry(entry.id, by: -1) }
+                .disabled(position == 0)
+            Button("Down") { model.moveSetlistEntry(entry.id, by: 1) }
+                .disabled(position >= model.setlist.entries.count - 1)
+            Button("Remove") { model.removeSetlistEntry(entry.id) }
+
+            Spacer()
         }
     }
 }
