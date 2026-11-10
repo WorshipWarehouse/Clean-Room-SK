@@ -13,13 +13,14 @@ this file tracks state.
 | Design | specification, contracts and feature inventory written | `clean-room-implementation.md`, `feature-inventory.md` |
 | Build, shell | done | commit `43637aa` |
 | Build, instrument | polyphonic wavetable instrument, lock-free command queue, layer routing | `Sources/SundayKeysCore/Audio/` |
-| Build, patches | patch bank, gapless switching, live layer editing, JSON persistence | `Sources/SundayKeysCore/Patch/`, `Sources/SundayKeysApp/`, run `42724195726` |
+| Build, patches | patch bank, gapless switching, live layer editing, JSON persistence | `Sources/SundayKeysCore/Patch/`, run `42724195726` |
 | Build, effects | EQ, chorus, delay and reverb after the voice mix, owned by the patch | `Sources/SundayKeysCore/Audio/Effects/`, run `42726206476` |
 | Build, controllers | learned per-patch CC mapping for layer gains and effect parameters | `Sources/SundayKeysCore/ControllerMapping.swift`, run `42726991886` |
-| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping | `Tests/SundayKeysCoreTests/`, run `42726206476` |
+| Build, set list | ordered service list with a play head, stepping, reorder and removal, stored in the bank | `Sources/SundayKeysCore/Setlist.swift`, `PatchBank.currentVersion` 4 |
+| Test | queue stress, envelope, release, bounded stealing, patch persistence and switching, effects DSP, effect persistence, controller mapping, set list ordering and set-list switching | `Tests/SundayKeysCoreTests/` |
 
-This is a working instrument with a working patch system, an original effects chain and a learned
-controller layout, not a finished product. Still missing: sessions and set lists, an `.app` bundle,
+This is a working instrument with a working patch system, an original effects chain, a learned
+controller layout and a playable set list, not a finished product. Still missing: an `.app` bundle,
 and every hardware check that needs the Mac (audio device output, a real controller, a native
 launch).
 
@@ -56,9 +57,9 @@ launch).
   writes it as JSON at `~/Library/Application Support/SundayKeys/patches.json`.
 - **Persistence.** Writes are atomic and create the directory, so a crash mid-save cannot leave a
   half-written bank. A missing file is not an error: the starter bank loads and the player gets an
-  instrument rather than an empty window. `KeyLayer`, `Patch`, `EffectsSettings` and
-  `ControllerMapping` all decode with documented defaults, so a bank written before a field existed
-  still loads.
+  instrument rather than an empty window. `KeyLayer`, `Patch`, `EffectsSettings`,
+  `ControllerMapping` and `Setlist` all decode with documented defaults, so a bank written before a
+  field existed still loads.
 - **Switching is gapless.** `setPatch` swaps the producer-side router, publishes each layer's timbre
   through the existing SPSC ring as `setLayerTimbre` commands, applies the new patch's effects and
   releases every sounding voice. Release is the same 220 ms fade, so the change is heard as a tail
@@ -71,7 +72,7 @@ launch).
   being changed.
 - **App surface.** Patch picker with previous/next, rename, new (a copy of the current patch), delete
   (guarded so the bank is never empty) and an explicit Save. A program change selects the patch with
-  that index, which is how a foot switch walks a set list. Each layer row edits enable, low and high
+  that index, which is how a foot switch walks a bank. Each layer row edits enable, low and high
   note, transpose, timbre and gain.
 - **Defaults.** Two layers: Keys 36 to 96 at gain 0.85 and Bell 72 to 96 at gain 0.45, so the overlap
   sounds twice and notes below 72 sound once.
@@ -114,7 +115,7 @@ of it is derived from the original app's DSP, and the analysis still records its
   existed sounds exactly as it did, and an engine built straight from layers stays dry, which is why
   the envelope, split and stealing tests are untouched. `Patch.starter`, the patch the app opens
   with, engages only a short reverb (mix 0.18, decay 0.5, damping 0.4).
-- **Persistence.** Effects live in `Patch`, `PatchBank.currentVersion` is 3, and `Patch` decodes
+- **Persistence.** Effects live in `Patch`, `PatchBank.currentVersion` is 4, and `Patch` decodes
   `effects` with `decodeIfPresent`, so a version 1 or 2 bank loads with the chain bypassed.
 
 What the effects tests cover: a reverb tail that is audible a second after the input stops, quieter
@@ -165,6 +166,60 @@ the other layer is untouched; a target whose layer is gone being ignored; the st
 answering on any channel; the target list being free of duplicates; the mapping surviving a bank round
 trip with its channel; a version 2 bank loading the standard layout; and a new patch starting with it.
 
+## Session and set list milestone
+
+A `Setlist` is an ordered list of `SetlistEntry` slots plus one play head, stored in `PatchBank`, so a
+service survives save, relaunch and any edit to the patches themselves. The original app's session
+format is not documented anywhere in the analysis, so the type reproduces the behaviour a player
+needs, not a recovered file layout; that separation is stated in the source as well.
+
+- **Slots have their own identity.** A slot is an entry with an id and a patch id, not a patch id on
+  its own, because a service can play the same patch twice and stepping has to tell the two slots
+  apart. A test pins that.
+- **The head is an identity, not an index.** `currentEntryID` names the slot, so removing an earlier
+  slot or reordering the list cannot move the head onto a different sound. Both cases are tested.
+- **Stepping wraps, jumping clamps.** `step(by:available:)` wraps at both ends so a foot switch can
+  cycle the service; `jump(to:)` clamps, because a slot number means that slot or the nearest one
+  that exists. Both choices are documented in the source and pinned by tests.
+- **Removal keeps a head.** Removing the head hands it to the slot that followed; removing the last
+  slot hands it to the new last one; emptying the list clears it. A head can never point at nothing.
+- **Insert clamps its index**, so a caller cannot fail to place a slot, and the first slot in an
+  empty list becomes the head.
+- **Missing patches are handled twice.** Deleting a patch prunes its slots and fixes the head, and
+  loading a hand-edited bank prunes too; stepping also skips a slot whose patch is gone, so a dangling
+  entry cannot stall a service.
+- **A bank with no set list plays in bank order.** That is what a bank written before set lists
+  existed gets: `stepSetlist` falls back to the patch order, wrapping the same way, and the app says
+  so in the panel instead of showing an empty box. `Fill from bank` turns that order into a real list.
+- **Adding a patch does not silently extend the service.** The player adds the slot deliberately, so
+  the set list stays what they built.
+- **The set list switch is the patch switch.** The app's only path from a slot to the engine is
+  `bank.patch(forEntry:)` followed by `setPatch`, the same call the bank picker makes, so a set list
+  step releases what is sounding and applies the new patch's effects. A test drives exactly those two
+  calls and asserts that the voices are freed and that the next patch inherits no reverb tail; a
+  second test asserts that stepping to a wetter patch does bring its reverb, which only happens if the
+  step really applied the settings.
+- **Picking a patch moves the head.** Selecting a patch from the bank picker moves the set list head
+  to that patch's first slot when it has one, so the position shown is the sound that is playing.
+  Program change goes through the same path.
+- **Persistence.** `PatchBank.currentVersion` is 4. A version 1, 2 or 3 bank has no `setlist` key and
+  decodes to an empty list, which plays in bank order; the stored version is reported as written. The
+  starter bank ships one slot pointing at the starter patch, so a fresh install has something to
+  step through.
+- **App surface.** A set list panel between the patch panel and the effects panel: every slot with
+  its number and patch name, a `now` marker on the current slot, `Play`, `Up`, `Down` and `Remove`
+  per slot, and `Prev`, `Next`, `Add patch` and `Fill from bank` for the list. The window scrolls, so
+  all five panels are reachable on a short display.
+
+What the set list tests cover: append keeping order and seeding the head; stepping with wrap at both
+ends and a zero step doing nothing; jumping with clamping; removing the head, the last slot and the
+whole list; removing an earlier slot leaving the head on its own patch; reorder keeping the head on
+its slot, in both directions; the same patch filling two slots while stepping tells them apart; insert
+clamping; pruning on delete and on load; a dangling slot being skipped; bank order covering every
+patch once; stepping a bank with no set list in bank order, wrapping; resolution of the patch a step
+lands on; the round trip through `PatchStore` including the play head; a version 3 bank loading
+without a set list and still stepping; and the engine tests above.
+
 ## Remote development: what CI actually does
 
 The local Mac has been unreachable for this whole stretch of work, so every result in this log comes
@@ -189,7 +244,8 @@ What that does not cover, and this log will not pretend otherwise: the install p
 `tools/bootstrap.sh` (it installs Homebrew casks and needs sudo, so it runs only on a developer
 machine), bundling a signed `.app`, starting `AVAudioEngine` against a real output device, CoreMIDI
 against a real controller, and anything that needs to be heard. The DSP is validated by offline
-tests that measure sample values; nobody has listened to it on this hardware.
+tests that measure sample values, and the set list panel has never been looked at on a screen:
+nobody has listened to this or clicked through it on this hardware.
 
 ## Decompilation: awaiting external access
 
@@ -205,13 +261,13 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 ## Next actions, in order
 
-1. Session and setlist management on top of the patch bank: an ordered set list per session, next and
-   previous through it, and a saved position, so a service can be played without touching the window.
-2. Bundle the package into a signed `.app` and add an audio-unit or standalone target, then use the
-   Mac for the first hardware validation: device output, a real controller, and a listen to the
-   effects chain.
-3. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
+1. Bundle the package into a signed `.app` and add an audio-unit or standalone target, then use the
+   Mac for the first hardware validation: device output, a real controller, a click through the set
+   list panel, and a listen to the effects chain.
+2. MIDI controller mapping refinements that need hardware: relative encoders, a foot switch, and the
    behaviour of a controller that sends on several channels.
+3. Session scope beyond one ordered list, once there is evidence for it: the original app's session
+   contents are **Unknown**, so the next step is a capture or a decompiled session type, not a guess.
 4. Reconnect the host, then decompile the queued targets (`Audio.KeyboardVelocityScaling`,
    `Audio.LayerRangeLimit` with `Domain.RangeApi`, the Realm MIDI learn tables,
    `Audio.SamplerPlugin` voice handling, and the rotor, chorus and delay parameter ranges) and
@@ -221,7 +277,7 @@ Ghidra 12.1.4 and Java 21 or newer under a persistent path, and about ten minute
 
 `.github/workflows/build.yml` runs the steps listed above on a `macos-15` runner for every push to
 main, and republishes compiler and test errors as check-run annotations, so a failing run is readable
-without the job log.
+without the job log. Rows are added only for runs whose conclusion has been read from the API.
 
 | commit | run | conclusion |
 | --- | --- | --- |
@@ -238,9 +294,8 @@ without the job log.
 | `2f9af82` | [42725884346](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42725884346) | failure, one test of the new suite: `testEQBandsLiftAndCutTheirBand` demanded a full -12 dB at 6 kHz and measured 0.555. A one-pole 3 kHz split leaves about 89 percent of a 6 kHz tone in the high band, so the assertion was wrong, not the DSP. Also dropped the cache action that emitted a Node 20 deprecation warning. Fixed in `242d555`. |
 | `242d555` | [42726206476](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726206476) | success: the EQ test now asserts the shelf shape and band isolation, the whole effects suite passes, the release build passes and the bootstrap smoke step passes. |
 | `8a95eb0` | [42726778003](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726778003) | failure, before tests ran: `ContentView.swift:329` passed a ternary mixing `.secondary` (a hierarchical style) and `.orange` (a colour) to `foregroundStyle`, which has no common type. Fixed in `34a0c0e`. |
-| `34a0c0e` | [42726991886](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726991886) | the one-line fix; the first run to build and exercise the controller mapping tests. |
-
-Treat a commit as built only when its own check run is green; later commits re-run the workflow.
+| `34a0c0e` | [42726991886](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42726991886) | success: the fixed tree, the controller mapping tests, the release build and the bootstrap smoke step. |
+| `ea50641` | [42727234267](https://github.com/WorshipWarehouse/Clean-Room-SK/actions/runs/42727234267) | success: the effects and controller write-up, with no code change to the tree above. |
 
 ## Coverage that remains
 
@@ -252,9 +307,10 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | velocity curve, split range semantics, voice stealing | not decompiled | awaiting external access |
 | the original app's effect parameter ranges and defaults | not decompiled | awaiting external access; this implementation's ranges are its own design and are documented in `EffectRanges` |
 | the original app's MIDI CC assignments | not decompiled | awaiting external access; this implementation's default layout is its own design and can be relearned |
+| the original app's session and set-list contents | not decompiled and not captured | a capture or a decompiled session type; the type here reproduces the behaviour, not the file layout |
 | licence wire details, Pusher channel and event names, chunk size, tempo authority | not statically recoverable | one captured session |
-| sessions, set lists, `.app` bundle | not implemented | next actions 1 and 2 |
-| audio device output, real controller, a listen to the chain | need the unreachable Mac | next action 2 |
+| `.app` bundle | not implemented | next action 1 |
+| audio device output, real controller, a clicked-through window | need the unreachable Mac | next action 1 |
 
 ## Decisions recorded
 
@@ -281,6 +337,13 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | learning replaces both directions | a knob must never move two parameters, and a parameter must never have two knobs |
 | a controller value maps onto the full range with exact endpoints | a control that cannot reach the end of its range is a bug the player notices |
 | the CI cache action was removed | it emitted a Node 20 deprecation warning for a build that takes under a minute |
+| a set list slot has its own id | a service can play the same patch twice, and stepping has to tell the slots apart |
+| the play head is an entry id, not an index | reordering or deleting an earlier slot must never move the head onto a different sound |
+| stepping wraps and jumping clamps | a foot switch cycles the service; a slot number pressed on purpose means that slot or the nearest one |
+| the set list lives in the bank, not in a separate file | a service and the patches it names are one thing to save, and a bank already carries its own format and defaults |
+| a bank without a set list plays in bank order | old banks keep working and a fresh bank needs no migration step |
+| a set list step goes through `setPatch` | it is a patch switch, so it must release voices and apply effects exactly like the bank picker |
+| adding a patch does not add a slot | the service is what the player built, not a side effect of editing patches |
 
 ## Commit trail
 
@@ -312,5 +375,8 @@ Treat a commit as built only when its own check run is green; later commits re-r
 | `86eea5a` | controller targets, bindings, value mapping and per-patch persistence with tests |
 | `8a95eb0` | learn mode in the app model and the mapping panel |
 | `34a0c0e` | the `foregroundStyle` ternary fixed to a single type |
+| `3d2d7d8` | set list model, play head, stepping, reorder, removal, pruning, bank version 4, set list tests |
+| `642c020` | set list stepping, slot actions and head tracking in the app model |
+| `da1a85d` | the set list panel and a scrolling window |
 
 Earlier analysis commits are listed in the analysis document itself.

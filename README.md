@@ -13,8 +13,8 @@ Nothing here is produced by executing the original app, and no original source w
 | static analysis | 89,486 functions decompiled, 3,186 types recovered, 20 documented sections |
 | feature inventory | capability checklist with evidence and gaps |
 | implementation plan | contracts, milestones, unknowns |
-| app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence, an original EQ/chorus/delay/reverb chain per patch, and a learned per-patch controller layout |
-| not yet built | sessions and set lists, `.app` bundle |
+| app | playable polyphonic instrument: wavetable voices, envelopes, splits and layers, CoreMIDI input, lock-free audio command queue, patch bank with gapless switching and JSON persistence, an original EQ/chorus/delay/reverb chain per patch, a learned per-patch controller layout, and an ordered set list with a play head |
+| not yet built | `.app` bundle |
 | decompilation of the next targets | awaiting host access, see `docs/re/access-determination.md` |
 
 Analysis figures: 3,316,097 lines of decompiled C (86.8 MB), 5,068 conformance descriptors parsed
@@ -28,13 +28,13 @@ dispatch references over 2,527 descriptors.
 | `docs/sunday-keys-2.5.2-analysis.md` | the analysis: 20 sections of findings |
 | `docs/feature-inventory.md` | capability checklist with evidence and gaps |
 | `docs/clean-room-implementation.md` | replication plan: contracts, milestones, unknowns |
-| `docs/progress.md` | phase status, next actions, decisions, every CI run |
+| `docs/progress.md` | phase status, next actions, decisions, every CI run that was read |
 | `docs/re/access-determination.md` | what blocks decompilation and what access it needs |
 | `Package.swift` | Swift package: `CSync`, `SundayKeysCore`, `SundayKeysApp` |
 | `Sources/CSync/` | atomic index loads and stores for the audio queue and the effects settings seqlock |
-| `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument, patch model and bank store, controller mapping |
+| `Sources/SundayKeysCore/` | MIDI parsing, velocity curve, note ranges, layer routing, SPSC queue, wavetable instrument, patch model and bank store, controller mapping, set list |
 | `Sources/SundayKeysCore/Audio/Effects/` | EQ, chorus, delay and reverb processors and the chain that publishes their settings |
-| `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker, layer editor, effects panel, controller mapping panel, CoreMIDI input, AVAudioEngine host |
+| `Sources/SundayKeysApp/` | SwiftUI shell with a playable keyboard, patch picker, set list panel, layer editor, effects panel, controller mapping panel, CoreMIDI input, AVAudioEngine host |
 | `Tests/SundayKeysCoreTests/` | unit tests for the core module |
 | `.github/workflows/build.yml` | resolve, build, test, release build and bootstrap smoke check on a macOS runner |
 | `tools/` | Mach-O, Swift metadata, literal and call-graph extractors, Ghidra drivers |
@@ -78,7 +78,7 @@ atomically, and a missing file loads the starter patch instead of an empty windo
   hanging;
 - editing the patch that is playing never releases voices, so moving a gain slider, turning an effect
   knob or moving a mapped controller cannot cut the chord under the player's hands;
-- a program change selects the patch with that index, so a foot switch can walk a set list.
+- a program change selects the patch with that index, so a foot switch can walk a bank.
 
 ## Effects
 
@@ -130,6 +130,33 @@ restored session restores what the knobs do.
   CC 74 to chorus mix. The original app's CC assignments are **Unknown** in the analysis, so these are
   this instrument's own defaults, and any of them can be relearned from the mapping panel.
 
+## Set list
+
+A set list orders patches into one service and remembers where the player is in it. It lives in the
+patch bank, so a service and the patches it names are saved together.
+
+- a slot is an entry with its own id and a patch id, so the same patch can appear twice and the two
+  slots stay distinct;
+- the play head is an entry id rather than a position, so reordering or removing an earlier slot
+  never moves the head onto a different sound;
+- stepping wraps at both ends, which is what a foot switch needs; jumping to a slot number clamps,
+  because a number means that slot or the nearest one that exists;
+- removing the head hands it to the following slot, removing the last slot hands it to the new last
+  one, and emptying the list clears it;
+- deleting a patch prunes its slots and fixes the head, and a slot whose patch is missing is skipped
+  while stepping;
+- a bank written before set lists existed has none and plays in bank order, and the panel says so
+  instead of showing an empty box;
+- a set list step is a real patch switch: it goes through the same `setPatch` call as the bank picker,
+  so it releases what is sounding and applies the new patch's effects. Tests assert that no reverb
+  tail is inherited and that a step to a wetter patch does bring its reverb;
+- picking a patch from the bank moves the head to its first slot, so the position shown and the sound
+  playing agree.
+
+The panel shows every slot with its number, name and a `now` marker, plus `Play`, `Up`, `Down` and
+`Remove` per slot and `Prev`, `Next`, `Add patch` and `Fill from bank` for the list. `PatchBank`
+format version 4 added the set list, and older banks load with an empty one.
+
 ## Reproduce the analysis
 
 Requirements: Python 3.11+, Java 21+, Ghidra 12.1.4, and an arm64 slice of the app binary.
@@ -180,14 +207,14 @@ artifacts rather than trusted from tool output, and retracted figures stay recor
 ## Known limits
 
 - No runtime capture, so licence wire details, the original app's effect parameter ranges, split
-  semantics, MIDI CC mappings, chunk size and tempo authority remain **Unknown**.
+  semantics, MIDI CC mappings, session contents, chunk size and tempo authority remain **Unknown**.
 - 234 dispatch references resolve outside the local type table; 31 types have no module name.
 - Call direction across modules is not yet recovered; the coupling map is co-occurrence.
-- There are no session or setlist features yet, and the package builds an app target rather than a
-  bundled `.app`.
-- The effects chain is validated by offline tests that measure samples, not by listening: no audio
-  device, controller or native launch has been exercised, because the Mac they need has been
-  unreachable. No local build has been run; every result comes from the macOS runner.
+- The package builds an app target rather than a bundled `.app`.
+- The effects chain is validated by offline tests that measure samples, not by listening, and the set
+  list panel and controller panel have never been looked at on a screen: no audio device, controller
+  or native launch has been exercised, because the Mac they need has been unreachable. No local build
+  has been run; every result comes from the macOS runner.
 - The instrument is a wavetable synthesiser, not a sampler: real sampled instruments need
   independently licensed or recorded material.
 
