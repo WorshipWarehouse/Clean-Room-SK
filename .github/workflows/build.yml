@@ -72,17 +72,26 @@ jobs:
           set -o pipefail
           swift build -c release
 
-      # The bundler builds, assembles and verifies its own output. Repeating the
-      # two cheapest checks here keeps a failure attributable to the workflow.
       - name: Bundle the app
         if: success()
         run: |
           set -o pipefail
           bash tools/bundle_app.sh 2>&1 | tee /tmp/bundle.log
-          test -x build/SundayKeys.app/Contents/MacOS/SundayKeysApp
-          plutil -lint build/SundayKeys.app/Contents/Info.plist
-          codesign --verify --strict build/SundayKeys.app
-          find build/SundayKeys.app -type f | sort
+          app=build/SundayKeys.app
+          test -x "$app/Contents/MacOS/SundayKeysApp"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign --verify --strict "$app"
+          find "$app" -maxdepth 3 -print
+
+      # Proves the bundle starts, reaches its run loop and exits cleanly. The
+      # script prints the session it found, the startup markers the app emitted
+      # and the exit status, and fails with the captured output when the app dies,
+      # hangs or exits on a signal.
+      - name: Launch the app
+        if: success()
+        run: |
+          set -o pipefail
+          bash tools/launch_smoke.sh
 
       # The bootstrap script documents the toolchain this package needs. Only its
       # --check path can run unattended: the install path would need Homebrew
