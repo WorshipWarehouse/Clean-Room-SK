@@ -241,7 +241,9 @@ final class SetlistPersistenceTests: XCTestCase {
         }
         """
 
-        let bank = try JSONDecoder().decode(PatchBank.self, from: Data(json.utf8))
+        // var, because stepping the set list is a mutation: this test drives the same
+        // call the app makes, including the bank-order fallback.
+        var bank = try JSONDecoder().decode(PatchBank.self, from: Data(json.utf8))
 
         XCTAssertEqual(bank.version, 3, "the stored version is reported as written")
         XCTAssertEqual(bank.patches.count, 1)
