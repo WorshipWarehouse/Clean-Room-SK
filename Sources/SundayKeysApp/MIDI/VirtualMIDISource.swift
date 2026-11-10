@@ -59,8 +59,6 @@ final class VirtualMIDISource {
 
         // One packet per list: a single add cannot overflow a buffer sized for it,
         // and the three sends the probe makes are cheap enough not to batch.
-        // CoreMIDI takes the sizes as UInt32 here; ByteCount is a C typedef that
-        // Swift does not bridge.
         let capacity = MemoryLayout<MIDIPacketList>.size + MemoryLayout<MIDIPacket>.size + packet.count
         let raw = UnsafeMutableRawPointer.allocate(
             byteCount: capacity,
@@ -73,10 +71,10 @@ final class VirtualMIDISource {
         packet.withUnsafeBufferPointer { bytes in
             _ = MIDIPacketListAdd(
                 list,
-                UInt32(capacity),
+                capacity,
                 first,
                 0,
-                UInt32(bytes.count),
+                bytes.count,
                 bytes.baseAddress!
             )
         }
