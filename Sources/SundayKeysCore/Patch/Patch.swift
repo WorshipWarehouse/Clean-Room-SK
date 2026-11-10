@@ -52,19 +52,27 @@ public struct Patch: Codable, Equatable, Identifiable, Sendable {
     }()
 }
 
-/// The whole set of patches the player has built, as written to disk.
+/// The whole set of patches the player has built, plus the set list that orders them
+/// for one service, as written to disk.
 public struct PatchBank: Codable, Equatable, Sendable {
-    /// Version 2 added per-patch effects, version 3 the per-patch controller layout.
-    /// Decoding stays tolerant: an older bank has no such key and loads with the
-    /// chain bypassed and the standard controller layout.
-    public static let currentVersion = 3
+    /// Version 2 added per-patch effects, 3 the per-patch controller layout and 4 the
+    /// set list. Decoding stays tolerant: an older bank has no such key and loads with
+    /// the chain bypassed, the standard controller layout and no set list, which the
+    /// app plays in bank order.
+    public static let currentVersion = 4
 
     public var version: Int
     public var patches: [Patch]
+    public var setlist: Setlist
 
-    public init(version: Int = PatchBank.currentVersion, patches: [Patch]) {
+    public init(
+        version: Int = PatchBank.currentVersion,
+        patches: [Patch],
+        setlist: Setlist = Setlist()
+    ) {
         self.version = version
         self.patches = patches
+        self.setlist = setlist
     }
 
     public func index(of id: UUID) -> Int? {
@@ -78,7 +86,7 @@ public struct PatchBank: Codable, Equatable, Sendable {
         return nil
     }
 
-    public static let starter = PatchBank(patches: [.starter])
+    public static let starter = PatchBank(patches: [.starter], setlist: .starter)
 }
 
 /// Reads and writes the bank as JSON.
@@ -123,8 +131,8 @@ public struct PatchStore {
 
 // Custom decoding rather than the synthesised conformance: a bank written before a
 // field existed must still load, with the field taking its documented default
-// instead of failing the whole bank. Effects were added in version 2 and the
-// controller layout in version 3.
+// instead of failing the whole bank. Effects were added in version 2, the controller
+// layout in version 3 and the set list in version 4.
 extension Patch {
     private enum CodingKeys: String, CodingKey {
         case id
@@ -150,5 +158,27 @@ extension Patch {
         try container.encode(layers, forKey: .layers)
         try container.encode(effects, forKey: .effects)
         try container.encode(controllerMapping, forKey: .controllerMapping)
+    }
+}
+
+extension PatchBank {
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case patches
+        case setlist
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        patches = try container.decode([Patch].self, forKey: .patches)
+        setlist = try container.decodeIfPresent(Setlist.self, forKey: .setlist) ?? Setlist()
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(version, forKey: .version)
+        try container.encode(patches, forKey: .patches)
+        try container.encode(setlist, forKey: .setlist)
     }
 }
