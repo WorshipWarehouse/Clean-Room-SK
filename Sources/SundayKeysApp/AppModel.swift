@@ -880,12 +880,14 @@ extension AppModel: MIDIEventTransport {
     func pitchBend(value: UInt16, channel: UInt8) {
         // The engine has no bend destination yet, so the event is recorded and
         // counted rather than pretended to have moved a pitch.
+        audio.pitchBend(ExpressionRange.normalisedBend(value))
         lastEvent = "bend \(value) ch \(channel + 1)"
     }
 
     func channelPressure(pressure: UInt8, channel: UInt8) {
         // Same as bend: modelled, delivered and counted, with no destination in the
         // engine at this point.
+        audio.channelPressure(ExpressionRange.normalisedPressure(pressure))
         lastEvent = "pressure \(pressure) ch \(channel + 1)"
     }
 }

@@ -216,4 +216,12 @@ final class AudioEngineController {
     func allNotesOff() {
         sounding?.allNotesOff()
     }
+
+    func pitchBend(_ normalised: Float) {
+        keysound?.pitchBend(normalised)
+    }
+
+    func channelPressure(_ normalised: Float) {
+        keysound?.channelPressure(normalised)
+    }
 }

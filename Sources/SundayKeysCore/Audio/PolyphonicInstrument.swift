@@ -65,6 +65,16 @@ public final class PolyphonicInstrument {
     private let stealFrames: Float
     private let mixGain: Float = 0.22
 
+    /// The ratio every sounding voice's phase advance is multiplied by. Two
+    /// semitones either side of centre is this repository's own decision; the
+    /// original's bend range is Unknown.
+    private var bendRatio: Double = 1
+    /// The trim applied to the finished mix. Neutral at zero pressure, so a
+    /// controller that never sends aftertouch changes nothing, and a full
+    /// pressure lifts the output by 1.4. The original's response is Unknown, so
+    /// this map is this repository's own and replaceable.
+    private var pressureGain: Float = 1
+
     private var nextAge: UInt64 = 1
 
     public init(
@@ -135,6 +145,10 @@ public final class PolyphonicInstrument {
             release(note: command.note, layer: command.layer)
         case .allNotesOff:
             releaseEverything()
+        case .pitchBend:
+            setBend(normalised: command.velocity)
+        case .channelPressure:
+            setPressure(normalised: command.velocity)
         case .setLayerTimbre:
             layerTimbre[Int(command.layer) & 0x7F] = command.note == 1 ? tableLength : 0
         }
@@ -203,7 +217,7 @@ public final class PolyphonicInstrument {
                 let high = tableData[base + ((first + 1) & (tableLength - 1))]
                 mix += (low + (high - low) * fraction) * voice.level
 
-                voice.phase += voice.increment
+                voice.phase += voice.increment * bendRatio
                 if voice.phase >= 1 {
                     voice.phase -= 1
                 }
@@ -211,7 +225,7 @@ public final class PolyphonicInstrument {
                 index += 1
             }
 
-            buffer[frame] += mix * mixGain
+            buffer[frame] += mix * mixGain * pressureGain
             frame += 1
         }
 
@@ -343,6 +357,21 @@ public final class PolyphonicInstrument {
             }
             index += 1
         }
+    }
+
+    /// Render thread only. A bend of -1 to 1 is clamped and turned into a
+    /// frequency ratio, so a wheel at either end reaches the full range once
+    /// and cannot transpose a voice past it.
+    private func setBend(normalised: Float) {
+        let clamped = max(-1, min(1, normalised))
+        bendRatio = pow(2.0, Double(clamped) * 2.0 / 12.0)
+    }
+
+    /// Render thread only. Zero pressure is exactly the neutral gain, so the
+    /// instrument sounds the same as it did before any pressure arrived.
+    private func setPressure(normalised: Float) {
+        let clamped = max(0, min(1, normalised))
+        pressureGain = 1 + 0.4 * clamped
     }
 
     private func publishVoiceCount() {

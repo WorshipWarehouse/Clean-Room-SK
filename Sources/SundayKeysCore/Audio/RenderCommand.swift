@@ -14,6 +14,12 @@ public struct RenderCommand: Equatable, Sendable {
         /// `note` carries the timbre index here (0 for keys, 1 for bell) because
         /// the command is a fixed-size slot and the field is free for this kind.
         case setLayerTimbre = 4
+
+        /// Transposes every sounding voice by a normalised bend: -1 to 1, one
+        /// being the full two semitone range the instrument documents.
+        case pitchBend = 5
+        /// Trims the finished mix by a normalised pressure: 0 is neutral.
+        case channelPressure = 6
     }
 
     public var kind: Kind

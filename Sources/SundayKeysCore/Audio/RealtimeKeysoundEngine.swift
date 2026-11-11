@@ -138,6 +138,19 @@ public final class RealtimeKeysoundEngine {
         enqueue(RenderCommand(kind: .allNotesOff))
     }
 
+    /// Producer side. Transposes every sounding voice by a normalised bend,
+    /// -1 to 1. The command rides the ring notes use, so a wheel move is heard
+    /// within a buffer period and never blocks the render thread.
+    public func pitchBend(_ normalised: Float) {
+        enqueue(RenderCommand(kind: .pitchBend, velocity: normalised))
+    }
+
+    /// Producer side. Normalised channel pressure, 0 to 1, applied as the
+    /// instrument's own gain trim.
+    public func channelPressure(_ normalised: Float) {
+        enqueue(RenderCommand(kind: .channelPressure, velocity: normalised))
+    }
+
     /// Producer side. Spins only when the ring is momentarily full, which is
     /// bounded by one render period because the consumer drains every block.
     @discardableResult
