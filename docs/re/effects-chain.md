@@ -66,6 +66,14 @@ engine carrying a reverb tail in both channels and being exactly silent when dry
 both taps surviving the bank, and a restored session opening the patch with its
 effects.
 
+## What the proof is
+
+The proof this milestone accepts is the hosted-runner set on the head that carries
+this document: the build workflow's `Test` step passing together with the click,
+patch-transfer, session and concurrency workflows. That is a proof about the
+emphasis on the sample measurements and the render path, and it is deliberately
+stronger than "it compiles".
+
 ## What is not established
 
 Nothing here was heard: no output device, no ear, no window, and no controller. The
