@@ -88,28 +88,53 @@ public struct ChorusSettings: Codable, Equatable, Sendable {
     }
 }
 
-/// Delay settings: the echo interval, how much of each repeat feeds the next, and
-/// the wet share.
+/// Delay settings: two independent echo times, one feedback control, one wet share.
 ///
-/// `time` is clamped to 20 ms to 1.2 s, which is also the length of the line, and
-/// `feedback` to 0.9 so the repeats always decay.
+/// `leftTime` is what the left channel hears and `rightTime` what the right hears;
+/// both are clamped to 20 ms to 1.2 s, which is the length of each tap. The taps
+/// share `feedback`, clamped to 0.9 so the repeats always decay, and there is no
+/// cross-feed: independent taps with a shared tail are what keep a wide setting
+/// stable instead of building a ping-pong that can run away.
+///
+/// `time` is the both-sides shorthand. Reading it gives the left tap and writing it
+/// moves both, so a control with one knob still works and a document written before
+/// the two taps existed still loads.
 public struct DelaySettings: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var mix: Float
-    public var time: Float
+    public var leftTime: Float
+    public var rightTime: Float
     public var feedback: Float
 
-    public init(enabled: Bool = false, mix: Float = 0.25, time: Float = 0.32, feedback: Float = 0.3) {
+    public init(
+        enabled: Bool = false,
+        mix: Float = 0.25,
+        leftTime: Float = 0.32,
+        rightTime: Float = 0.32,
+        feedback: Float = 0.3
+    ) {
         self.enabled = enabled
         self.mix = mix
-        self.time = time
+        self.leftTime = leftTime
+        self.rightTime = rightTime
         self.feedback = feedback
+    }
+
+    /// Both taps at once.
+    public var time: Float {
+        get { leftTime }
+        set {
+            leftTime = newValue
+            rightTime = newValue
+        }
     }
 
     private enum CodingKeys: String, CodingKey {
         case enabled
         case mix
         case time
+        case leftTime
+        case rightTime
         case feedback
     }
 
@@ -118,30 +143,53 @@ public struct DelaySettings: Codable, Equatable, Sendable {
         let defaults = DelaySettings()
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? defaults.enabled
         mix = try container.decodeIfPresent(Float.self, forKey: .mix) ?? defaults.mix
-        time = try container.decodeIfPresent(Float.self, forKey: .time) ?? defaults.time
+        let single = try container.decodeIfPresent(Float.self, forKey: .time)
+        leftTime = try container.decodeIfPresent(Float.self, forKey: .leftTime) ?? single ?? defaults.leftTime
+        rightTime = try container.decodeIfPresent(Float.self, forKey: .rightTime) ?? single ?? defaults.rightTime
         feedback = try container.decodeIfPresent(Float.self, forKey: .feedback) ?? defaults.feedback
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(enabled, forKey: .enabled)
+        try container.encode(mix, forKey: .mix)
+        try container.encode(leftTime, forKey: .leftTime)
+        try container.encode(rightTime, forKey: .rightTime)
+        try container.encode(feedback, forKey: .feedback)
     }
 }
 
-/// A three-band voicing stage: a one-pole split at 250 Hz and 3 kHz with a gain per
-/// outer band and the middle band left alone.
+/// A three-section voicing stage: a low shelf at 250 Hz, a peaking band at 1 kHz
+/// and a high shelf at 3 kHz.
 ///
-/// The three bands sum to the input exactly, so with both gains at 0 dB the stage
-/// is bit-transparent and can be left engaged without colouring the instrument.
+/// The analysis records the original's curve as Unknown, so the corners and the
+/// peaking width are this repository's own choice. A section whose gain is exactly
+/// 0 dB is not run at all, which makes a flat EQ bit-transparent rather than
+/// approximately transparent and lets the chain keep it engaged.
 public struct EQSettings: Codable, Equatable, Sendable {
     public var enabled: Bool
     public var lowGain: Float
     public var highGain: Float
+    /// The peaking band's gain, which is the band the first version had no control
+    /// for: low and high were shelves and everything between them was fixed.
+    public var midGain: Float
 
-    public init(enabled: Bool = false, lowGain: Float = 0, highGain: Float = 0) {
+    public init(
+        enabled: Bool = false,
+        lowGain: Float = 0,
+        highGain: Float = 0,
+        midGain: Float = 0
+    ) {
         self.enabled = enabled
         self.lowGain = lowGain
         self.highGain = highGain
+        self.midGain = midGain
     }
 
     private enum CodingKeys: String, CodingKey {
         case enabled
         case lowGain
+        case midGain
         case highGain
     }
 
@@ -151,6 +199,7 @@ public struct EQSettings: Codable, Equatable, Sendable {
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? defaults.enabled
         lowGain = try container.decodeIfPresent(Float.self, forKey: .lowGain) ?? defaults.lowGain
         highGain = try container.decodeIfPresent(Float.self, forKey: .highGain) ?? defaults.highGain
+        midGain = try container.decodeIfPresent(Float.self, forKey: .midGain) ?? defaults.midGain
     }
 }
 
