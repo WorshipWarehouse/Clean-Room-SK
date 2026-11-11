@@ -1,0 +1,26 @@
+name: record
+# Dispatch-only and temporary: appends docs/re/final-head-77119a68.md to
+# docs/progress.md, which is too large to rewrite through the contents API.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Append the section
+        run: |
+          set -euo pipefail
+          printf '\n' >> docs/progress.md
+          cat docs/re/final-head-77119a68.md >> docs/progress.md
+          wc -c docs/progress.md
+      - name: Commit
+        run: |
+          set -euo pipefail
+          git config user.name WorshipWarehouse
+          git config user.email worshipwarehousesite@gmail.com
+          git add docs/progress.md
+          git commit -m "Progress log: the step clock wired into the app, green on 77119a68"
+          git push
