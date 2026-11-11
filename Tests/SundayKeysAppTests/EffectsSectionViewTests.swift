@@ -10,24 +10,27 @@ import SundayKeysCore
 /// prove that the window's own controls are wired to that method: the panel used to be a private
 /// property of `ContentView`, so nothing could instantiate it. It is now `EffectsSection`, the
 /// view `ContentView` shows, and these cases host that exact view in an `NSHostingView` with no
-/// window and no display, assert it laid out with its labels, press the AppKit controls SwiftUI
-/// creates behind each switch and slider, and measure what the panel did to the audio.
+/// window and no display, assert it laid out with its labels, press the controls the panel draws,
+/// and measure what the panel did to the audio.
 ///
-/// Three things about driving a SwiftUI control offscreen are stated here because they were
-/// learned from failing runs, not assumed:
+/// Four things about driving those controls offscreen are stated here because they were learned
+/// from failing runs, not assumed:
 ///
 /// * A SwiftUI `Slider(in: a...b)` is backed by an `NSSlider` whose own range is 0...1, so a value
 ///   has to be moved in as a fraction of the panel's range; assigning the logical value directly
 ///   clamps to the slider's end (0.08 s landed on 0.1144 s, which is 0.08 of 0.02...1.2).
-/// * The hosted controls are SwiftUI's own classes - `CustomMarkedSlider` and
-///   `FocusRingNSButton` - and they do not carry the `accessibilityIdentifier` applied in the
-///   view; the identifiers live in the accessibility tree instead. Lookup therefore matches the
-///   identifier when a platform does forward it and otherwise takes the control's position, which
-///   the first case pins by counting the switches and sliders the panel lays out.
-/// * A switch is not driven by `performClick`: with no window to host the click, that does not
-///   reach the binding. It is driven the way AppKit delivers a click - the state a click would
-///   set, then the button's own action - with `performClick` kept as a second attempt, and the
-///   case reports which attempt wrote through when it can.
+/// * The hosted controls are SwiftUI's own classes (`CustomMarkedSlider`, `FocusRingNSButton`) and
+///   they carry an empty `accessibilityIdentifier` even though the view sets one; the identifiers
+///   live in the accessibility tree. Lookup matches the identifier when a platform forwards it and
+///   otherwise takes the control's position, which the first case pins by counting the switches and
+///   sliders the panel lays out.
+/// * A switch cannot be driven through AppKit at all here. `FocusRingNSButton` has neither a
+///   target nor an action, so `sendAction` and `performClick` both reach nothing. The interface
+///   that does exist is accessibility: `accessibilityPerformPress()`, which AppKit documents as
+///   simulating a click and which is exactly what a player's assistive technology calls. That is
+///   the press this file uses, with the AppKit paths kept behind it.
+/// * A control's action does not finish updating the model until the hosting view has laid out
+///   again, so every drive is followed by a settle pass before anything is read.
 ///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
@@ -139,21 +142,51 @@ final class EffectsSectionViewTests: XCTestCase {
         try control(identifier, as: NSButton.self, order: Self.toggleOrder, in: view)
     }
 
+    /// The accessibility element the panel publishes under an identifier: for a hosted SwiftUI
+    /// control this is the element that carries both the identifier and the press action.
+    private func accessibilityElement(_ identifier: String, in element: Any) -> NSAccessibilityProtocol? {
+        guard let object = element as? NSAccessibilityProtocol else { return nil }
+        if object.accessibilityIdentifier() == identifier {
+            return object
+        }
+        guard let children = object.accessibilityChildren() else { return nil }
+        for child in children {
+            if let found = accessibilityElement(identifier, in: child) {
+                return found
+            }
+        }
+        return nil
+    }
+
     /// Presses the switch the panel draws until the model reflects it, and fails with what each
     /// attempt saw if none of them writes through.
     private func press(_ identifier: String, in view: NSView, changed: () -> Bool) throws {
-        let button = try toggle(identifier, in: view)
         var attempts: [String] = []
 
-        // A click, delivered the way AppKit delivers one: the state it would set, then the
-        // button's own action. This is the path that reaches a binding with no window.
+        // The press a player's assistive technology makes. It is the only press a hosted SwiftUI
+        // switch has: the AppKit button behind it carries no target and no action.
+        if let element = accessibilityElement(identifier, in: view) {
+            let pressed = element.accessibilityPerformPress()
+            settle(view)
+            attempts.append(
+                "accessibilityPerformPress returned \(pressed) on \(type(of: element))"
+            )
+            if changed() { return }
+        } else {
+            attempts.append(
+                "no accessibility element named \(identifier); the tree carries "
+                    + "\(accessibilityIdentifiers(in: view))"
+            )
+        }
+
+        // The AppKit paths, for a platform that does give the control a target and an action.
+        let button = try toggle(identifier, in: view)
         button.state = .on
         button.sendAction(button.action, to: button.target)
         settle(view)
         attempts.append("state+sendAction on \(describe(button))")
         if changed() { return }
 
-        // The click itself, for platforms that route it through the control.
         button.performClick(nil)
         settle(view)
         attempts.append("performClick on \(describe(button))")
