@@ -25,11 +25,13 @@ have to reconstruct it from the run list.
 | `e9cfb583` | its `docs/re/heads.md` rows with the instrument-catalogue evidence and the row above, and the removal of `.github/workflows/progress_append.yml` | five runs, all terminal success at attempt 1 with runners: `43066957704` build debug-with-tests 17:19:19-17:19:49, `Test` 17:19:49-17:19:55, release 17:19:55-17:20:20, bundle 17:20:20-17:20:22, launch 17:20:22-17:20:30, audio 17:20:30-17:20:33, MIDI 17:20:33-17:20:35, licence 17:20:35-17:20:39, bootstrap 17:20:39-17:20:40, complete 17:20:46; `43066957703` click 17:19:12-17:19:50; `43066957591` patch-transfer 17:19:09-17:19:47; `43066957543` session 17:19:12-17:19:58; `43066957675` concurrency 17:19:11-17:19:46. The `budget` workflow did not run, because the push changed only docs and a workflow file |
 | `4363807e` | `tools/strict_concurrency.sh`, the rescheduled `.github/workflows/concurrency.yml`, `docs/tasks.md`, `docs/re/ci-runner-queue.md` and the row above | build, click, patch-transfer and session on the push; `concurrency` starts on `workflow_run` once the build for this commit completes, and is the run whose first step prints `git rev-parse HEAD`; `budget` is skipped, because no `Sources`, `Tests` or `Package.swift` file changed |
 | `fc5cbf40` | `Tests/SundayKeysAppTests/EffectsPanelTests.swift`, the effects-coverage entry in `docs/tasks.md` and `docs/re/effects-panel-coverage.md` | six runs, all terminal green: `43080592278` build (attempt 2) 18:45:23-18:47:24 - debug-with-tests 18:45:35-18:46:12 with the new file in the target, `Test` 18:46:13-18:46:20, release 18:46:20-18:46:53, bundle 18:46:53-18:46:55, launch 18:46:55-18:47:03, audio 18:47:03-18:47:06, MIDI 18:47:06-18:47:09, licence 18:47:09-18:47:15, bootstrap 18:47:17-18:47:20, complete 18:47:24; `43080593047` click (attempt 2) 18:45:22-18:46:18; `43080592029` patch-transfer (attempt 2) 18:45:21-18:46:07; `43080592416` session (attempt 3) 18:46:18-18:46:56; `43080628905` concurrency 18:44:37-18:45:12 and `43081086465` concurrency 18:47:31-18:48:19, the second fired by the build's completion; `43080592359` budget (attempt 7) 18:48:44-18:49:29, engaged median 911.1 us of a 10,667 us block (8.5%) with a 2,942.1 us worst block (27.6%), bypassed median 536.2 us (5.0%) with a 3,507.8 us worst (32.9%), the chain 1.7x the dry path. Attempt 1 of the five push runs never picked up a runner and was cancelled; budget attempts 3 and 5 never did either, and attempts 4 and 6 were cancelled on a stale runner-less reading while they were in fact starting, so attempt 7 was re-run alone and left to finish. Attempt 2 of budget had measured the same cost (engaged median 1,010.6 us) and failed only on one 18,117 us stalled block in the bypassed path |
-| this commit | the run evidence above in `docs/re/heads.md` and `docs/re/effects-panel-coverage.md` | build, click, patch-transfer and session on the push; `concurrency` when the build for this commit completes; `budget` is skipped, because no `Sources`, `Tests` or `Package.swift` file changed |
+| `ce5b4c64` | `Sources/SundayKeysApp/EffectsSlider.swift` (an `NSSlider` whose own range is the effect's range, with `NSView.identifier` and an action into `AppModel.updateEffects`), `EffectsSection` moving all eight sliders onto it, and the rewritten `Tests/SundayKeysAppTests/EffectsSectionViewTests.swift` | five runs, all with runners at attempt 1: `43086072277` build debug-with-tests 19:19:23-19:19:54 with the new file in the target, `Test` 19:19:54-19:20:03 failed only on the layout case's label assertions (`the panel should label low; saw []`) - every control case passed on that head, including the delay measured at 3,840 and 11,520 frames through the panel's own time slider; `43086072408` click 19:19:19-19:20:06; `43086072416` patch-transfer 19:20:07-19:21:00; `43086072373` session 19:19:19-19:20:05; `43086072346` budget 19:19:12-19:20:01 |
+| `cf0e45f2` | the layout case rewritten to verify the panel's labels as laid-out geometry and drawn ink, since a detached host publishes no accessibility tree and SwiftUI draws text itself | six runs, all terminal green: `43086491955` build debug-with-tests 19:22:03-19:22:39 with the panel cases inside the suite, `Test` 19:22:39-19:22:50, release 19:22:50-19:23:26, bundle 19:23:26-19:23:28, launch 19:23:28-19:23:35, audio 19:23:35-19:23:38, MIDI 19:23:38-19:23:40, licence 19:23:40-19:23:47, bootstrap 19:23:47-19:23:50, complete 19:23:54; `43086491932` click 19:21:52-19:22:28; `43086492040` patch-transfer 19:21:51-19:22:36; `43086491928` session 19:21:52-19:22:45; `43086491956` budget 19:21:52-19:22:19; `43086836505` concurrency (attempt 1), fired by the build's completion, 19:24:06-19:24:54 |
+| this commit | `docs/tasks.md` with the live-path item ticked, `docs/re/effects-panel-view-path.md`, and the two rows above | build, click, patch-transfer and session on the push; `concurrency` when the build for this commit completes; `budget` is skipped, because no `Sources`, `Tests` or `Package.swift` file changed |
 
 ## What the runs prove
 - The code compiles in debug with tests, the whole suite passes on a `macos-15` runner, the release
-  build and the bundle succeed, the app launches, and the audio, MIDI and licence-session probes return
+build and the bundle succeed, the app launches, and the audio, MIDI and licence-session probes return
   their recorded values.
 - The MIDI routing seam compiles with complete concurrency checking and carries no diagnostic. That
   proof is `tools/strict_concurrency.sh`, run as four named steps of the `concurrency` workflow, which
@@ -49,6 +51,10 @@ have to reconstruct it from the run list.
   through `AppModel.updateEffects`, then renders `model.patch` on the real engine and measures a shelf
   boost against a shelf cut, the two delay taps against each other, the wet tail against the dry
   release, and `voiceCount` across a live edit.
+- The panel the window shows is reachable and wired: `EffectsSectionViewTests` lays the shipped
+  `EffectsSection` out offscreen, renders it, finds four switches and eight sliders by identifier with
+  their ranges, clicks the reverb switch and moves the sliders, and measures the samples each one
+  changes - including the delay's copy at 3,840 frames for 0.08 s and 11,520 for 0.24 s.
 
 ## What they do not prove
 
@@ -63,8 +69,10 @@ have to reconstruct it from the run list.
   involved, so it says nothing about the round trip a player would hear or about glitch-free playback.
   It is also sensitive to a stalled runner: attempt 2 of `fc5cbf40` failed on one 18 ms block while its
   median stayed at 9.5% of the budget.
-- The effects panel has not been seen: its controls were driven through the model method they call, so
-  layout, labels and focus behaviour remain unverified.
+- The effects panel has been driven through its own controls, but never seen in a window: layout, focus,
+  keyboard traversal and what it looks like to a player remain unverified. Its labels are proven as the
+  column each row reserves and the ink each row draws, not read back as strings, because a detached
+  host publishes no accessibility tree.
 - The instrument picker was compiled and never seen, no sampled instrument ships, and nothing here says
   how the original stores, downloads or streams its instruments.
 - Runner scheduling is GitHub's, not this repository's. Moving the strict job behind the build removes

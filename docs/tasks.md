@@ -56,8 +56,8 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       `workflow_run` of `build` completing on `main` and checks out
       `github.event.workflow_run.head_sha`, so the strict job no longer competes with the build for a
       macOS runner. Evidence: `docs/re/ci-runner-queue.md`.
-- [x] **Effects panel coverage** — the panel's controls are now exercised through the one method they
-      call, `AppModel.updateEffects`, and measured on the samples that path produces.
+- [x] **Effects panel coverage (model path)** — the panel's controls are exercised through the one
+      method they call, `AppModel.updateEffects`, and measured on the samples that path produces.
       `Tests/SundayKeysAppTests/EffectsPanelTests.swift` edits the patch through the model and renders
       `model.patch` on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per block, then asserts
       measured facts: the reverb switch changes the rendered samples and leaves the model's status line
@@ -67,8 +67,25 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       them back under half of that; the wet tail at blocks 70-80 outlives the dry release by more than
       1.5x; and an effect changed while a note sounds, republished with `releasingVoices: false`, leaves
       `voiceCount` unchanged, so a live edit does not cut the held chord. Evidence:
-      `docs/re/effects-panel-coverage.md`. Not claimed: the panel has been seen, because this
-      environment has no window.
+      `docs/re/effects-panel-coverage.md`. This item says nothing about the view the window shows; the
+      item below covers that.
+- [x] **Effects panel live path** — the panel the window shows is now exercised as that view.
+      `Tests/SundayKeysAppTests/EffectsSectionViewTests.swift` hosts the shipped `EffectsSection` in an
+      `NSHostingView` at 900x210 with no window and no display, renders the same view with
+      `ImageRenderer`, and drives the controls a player touches. Both controls ship as AppKit views with
+      real actions and `NSView.identifier`s — `EffectsSwitch`, an `NSButton` checkbox, and
+      `EffectsSlider`, an `NSSlider` whose own range is the effect's range — because a hosted SwiftUI
+      `Toggle` has no target and no action and a hosted SwiftUI `Slider` carries no identifier. The
+      cases require the panel to lay out four switches and eight sliders by name with each slider's
+      range, every row to reserve at least 60 points of label column and draw ink, then: clicking
+      `effects.reverb.enabled` writes through `AppModel.updateEffects`, leaves the status line reading
+      `Edited effects on <patch>, not saved yet`, and changes the rendered samples; a +12 dB shelf
+      carries more than 1.5x the RMS of the same shelf at -12 dB; chorus mix 0.5 / rate 3.5 changes the
+      wet copy; and the delay's copy arrives at 3,840 frames at 0.08 s and 11,520 at 0.24 s, measured
+      against a render whose copy falls outside the 0.64 s window. Evidence:
+      `docs/re/effects-panel-view-path.md`. Not claimed: that the panel has been seen or heard, or that
+      its labels read back as strings — a detached host publishes no accessibility tree, so the labels
+      are proven as the column each row reserves and the ink it draws.
 
 ## Next
 
@@ -97,8 +114,9 @@ or a window this environment does not have. The next pass should start from the 
   Unknown wire and an Unknown container format, the content is licensed and was not copied, and there
   is no entitlement to download it; the catalogue above is synthesised for that reason.
 - **The window has never been seen**, so layout, focus and panel behaviour are unverified by eye. The
-  effects panel is covered through the model method its controls call, not by clicking it, and the
-  instrument picker is compiled and tested but not viewed.
+  effects panel is now driven through its own shipped controls offscreen
+  (`docs/re/effects-panel-view-path.md`), but no window was involved, so what a player sees is still
+  unverified; the instrument picker is compiled and tested but not viewed.
 - **The original app's licence wire, effect parameter ranges, split semantics, MIDI CC numbers and
   session contents remain Unknown** (`docs/feature-inventory.md`, Known limits), so no parity is
   claimed for them.
