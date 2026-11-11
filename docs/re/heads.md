@@ -17,10 +17,11 @@ have to reconstruct it from the run list.
 | `e40713e6` | the restored `DelaySettings(time:)` shorthand initialiser | superseded before its runs finished |
 | `e6989bba` | the appended `docs/progress.md` milestone | none: pushed by the job's repository token, `43059543923` was the append job |
 | `c839b64e` | the effects code, tests and docs plus the proof section in `docs/re/effects-chain.md` | five runs, all terminal success: `43060202038` build (dispatched, since the path filter skips docs-only pushes) debug-with-tests 16:37:57-16:38:25, `Test` 16:38:26-16:38:30, release 16:38:30-16:38:53, bundle 16:38:53-16:38:55, launch 16:38:55-16:39:01, audio probe 16:39:01-16:39:03, MIDI probe 16:39:03-16:39:05, licence probe 16:39:06 onward; `43059645819` click (attempt 3) 16:36:45-16:37:29; `43059645864` patch-transfer (attempt 3) 16:36:43-16:37:27; `43059645350` session (attempt 2) 16:35:31-16:36:12; `43059645755` concurrency 16:34:41-16:35:26 |
-| this commit | the architecture section, `docs/tasks.md` and this row | see the runs raised with it |
+| `8dd8419d` | the implemented-architecture section in `docs/clean-room-implementation.md`, `docs/tasks.md` and the row above | six runs, all terminal success: `43061174466` build (dispatched) 16:43:59-16:45:54, `Test` 16:44:49-16:44:54, launch and the audio, MIDI and licence probes green; `43061143444` build (attempt 3, after the dispatch cancelled attempt 1 and a runner-less attempt 2 was re-run) `Test` 16:48:08-16:48:14, launch 16:48:47-16:48:54, audio 16:48:54-16:48:56, MIDI 16:48:56-16:48:59, licence 16:48:59-16:49:05, complete 16:49:12; `43061143570` click 16:43:37-16:44:25; `43061143333` patch-transfer (attempt 3) 16:45:31-16:46:26; `43061143251` session 16:43:37-16:44:19; `43061143323` concurrency (attempt 2) 16:44:48-16:45:32 |
+| `8d1def9c` | `RenderBudgetTests` and `.github/workflows/budget.yml`: the cost of one render block, measured on the real `renderStereo` path | six runs, all terminal success: `43062985714` build (attempt 2) debug-with-tests 16:55:57-16:56:27 with the budget test inside the suite, `Test` 16:56:27-16:56:33, release, bundle, launch 16:56:57-16:57:03, audio 16:57:03-16:57:06, MIDI 16:57:06-16:57:08, licence 16:57:08-16:57:13, complete 16:57:20; `43062985603` budget (attempt 2) 16:55:47-16:56:30, reporting engaged median 999.4 us of a 10,667 us block with a 2960.5 us worst block, and bypassed median 592.0 us with a 1671.8 us worst; `43062985817` click (attempt 2) 16:55:46-16:56:37; `43062985747` patch-transfer (attempt 2) 16:55:47-16:56:43; `43062985586` session 16:55:02-16:55:59; `43062985776` concurrency 16:54:59-16:55:43. Attempt 1 of build, budget, click and patch-transfer never picked up a runner, so each was cancelled and re-run |
+| this commit | the measured budget in `docs/tasks.md` and these two rows | docs only: build, click, patch-transfer, session and concurrency; the `budget` path filter skips a docs-only push |
 
 ## What the runs prove
-
 - The code compiles in debug with tests, the whole suite passes on a `macos-15` runner, the release
   build and the bundle succeed, the app launches, and the audio, MIDI and licence-session probes return
   their recorded values.
@@ -29,6 +30,9 @@ have to reconstruct it from the run list.
 - The effects chain is measured on samples, not on plumbing: tail versus bit-identical bypass, tap
   positions at 2,400 and 12,000 samples, feedback ratios, chorus movement, per-band EQ response,
   long-run finiteness, and bank and session round trip.
+- The render path's cost is measured, not inspected: `RenderBudgetTests` drives `renderStereo` with ten
+  voices and the whole chain engaged at 512 frames and 48 kHz, and fails if the engaged median takes
+  more than a quarter of the block or if any single block overruns it.
 
 ## What they do not prove
 
@@ -39,3 +43,5 @@ have to reconstruct it from the run list.
 - The device path fills left and right and the runner's probes start the graph, but no one has
   listened to the two sides, so "the taps reach the speakers" rests on the code path and the measured
   samples.
+- The render budget is DSP cost in isolation on a CI runner, not a latency figure: no interface was
+  involved, so it says nothing about the round trip a player would hear or about glitch-free playback.
