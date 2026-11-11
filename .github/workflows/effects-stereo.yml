@@ -1,0 +1,24 @@
+name: effects-stereo
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+      - name: Apply the edits
+        run: |
+          python3 tools/apply_effects_stereo.py
+      - name: Commit and push
+        run: |
+          git config user.name WorshipWarehouse
+          git config user.email worshipwarehousesite@gmail.com
+          git rm -q .github/workflows/effects-stereo.yml tools/apply_effects_stereo.py
+          git add Sources
+          git commit -q -m "Wire the chain and the device in stereo"
+          git push origin HEAD:main
