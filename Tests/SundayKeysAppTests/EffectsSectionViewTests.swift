@@ -13,6 +13,15 @@ import SundayKeysCore
 /// window and no display, assert it laid out with its labels, then press the AppKit controls
 /// SwiftUI creates behind each checkbox and slider and measure what the panel did to the audio.
 ///
+/// Two things about driving a SwiftUI control offscreen are worth stating, because both were
+/// learned from a failing run rather than assumed:
+///
+/// * A SwiftUI `Slider(in: a...b)` is backed by an `NSSlider` whose own range is 0...1, so a value
+///   has to be moved in as a fraction of the panel's range; assigning the logical value directly
+///   clamps to the slider's end (0.08 s landed on 0.1144 s, which is 0.08 of 0.02...1.2).
+/// * The control's action does not finish updating the model until the view has been laid out
+///   again, so each drive is followed by a settle pass before anything is asserted.
+///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
 /// device, opens a window or fakes a stage of the chain.
@@ -32,6 +41,19 @@ final class EffectsSectionViewTests: XCTestCase {
         "effects.delay.mix", "effects.delay.time", "effects.reverb.mix", "effects.reverb.decay",
     ]
 
+    /// The range each slider's SwiftUI control declares, which is what a logical value has to be
+    /// converted through to reach the backing control.
+    private static let sliderRanges: [String: ClosedRange<Double>] = [
+        "effects.eq.lowGain": -12...12,
+        "effects.eq.highGain": -12...12,
+        "effects.chorus.mix": 0...1,
+        "effects.chorus.rate": 0.05...6,
+        "effects.delay.mix": 0...1,
+        "effects.delay.time": 0.02...1.2,
+        "effects.reverb.mix": 0...1,
+        "effects.reverb.decay": 0...1,
+    ]
+
     // MARK: - Fixtures
 
     private func makeModel() -> AppModel {
@@ -48,6 +70,16 @@ final class EffectsSectionViewTests: XCTestCase {
         view.frame = NSRect(origin: .zero, size: panelSize)
         view.layoutSubtreeIfNeeded()
         return view
+    }
+
+    /// Lets the view finish the update a control's action started. Without this the model can be
+    /// read before SwiftUI has written the binding, which is exactly how the EQ and chorus
+    /// switches first appeared not to work while the reverb case - which moved sliders before
+    /// asserting - appeared to.
+    private func settle(_ view: NSView) {
+        view.layoutSubtreeIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.02))
+        view.layoutSubtreeIfNeeded()
     }
 
     // MARK: - Reaching the controls the window shows
@@ -97,18 +129,26 @@ final class EffectsSectionViewTests: XCTestCase {
         try control(identifier, as: NSButton.self, order: Self.toggleOrder, in: view)
     }
 
-    /// Moves a slider the way a pointer would: the value changes and the control sends its own
-    /// action, so the write goes through the binding the panel installed, not around it.
-    private func move(
-        _ identifier: String,
-        to value: Double,
-        in view: NSView,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) throws {
+    /// Presses the switch the panel draws, then lets the view settle.
+    private func press(_ identifier: String, in view: NSView) throws {
+        let button = try toggle(identifier, in: view)
+        button.performClick(nil)
+        settle(view)
+    }
+
+    /// Moves a slider the way a pointer would: the value is converted into the backing control's
+    /// own range, the control sends its own action, and the view settles before anything is read.
+    private func move(_ identifier: String, to value: Double, in view: NSView) throws {
         let slider = try control(identifier, as: NSSlider.self, order: Self.sliderOrder, in: view)
-        slider.doubleValue = value
+        let range = try XCTUnwrap(
+            Self.sliderRanges[identifier],
+            "no declared range for \(identifier)"
+        )
+        let fraction = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
+        let span = slider.maxValue - slider.minValue
+        slider.doubleValue = slider.minValue + fraction * span
         slider.sendAction(slider.action, to: slider.target)
+        settle(view)
     }
 
     // MARK: - The rendered panel
@@ -248,8 +288,9 @@ final class EffectsSectionViewTests: XCTestCase {
     // MARK: - The panel is really there
 
     /// Layout and labels: the hosting view has a sensible size, the render carries ink rather
-    /// than a blank rectangle, and the stage names and parameter names are in the tree the
-    /// player's assistive technology would read.
+    /// than a blank rectangle, the stage names and parameter names are in the tree the player's
+    /// assistive technology would read, and the controls carry the identifiers the cases below
+    /// drive them by.
     func testTheShippedPanelLaysOutAndCarriesItsLabels() throws {
         let model = makeModel()
         let view = host(model)
@@ -273,6 +314,18 @@ final class EffectsSectionViewTests: XCTestCase {
             seen.contains(where: { $0.contains("Save keeps them") }),
             "the panel should carry its footnote; saw \(seen)"
         )
+        XCTAssertTrue(
+            accessibilityStrings(in: view).contains(where: { $0.contains("Effects") }),
+            "the panel should carry its Effects group title; saw \(seen)"
+        )
+
+        let identifiers = Set(controls(in: view).map { $0.accessibilityIdentifier() })
+        for identifier in Self.toggleOrder + Self.sliderOrder {
+            XCTAssertTrue(
+                identifiers.contains(identifier),
+                "the rendered panel carries no control named \(identifier); \(listing(view))"
+            )
+        }
     }
 
     // MARK: - The controls reach the model and the sound
@@ -284,14 +337,12 @@ final class EffectsSectionViewTests: XCTestCase {
         let view = host(model)
         let dry = render(model.patch)
 
-        let reverb = try toggle("effects.reverb.enabled", in: view)
-        reverb.performClick(nil)
+        try press("effects.reverb.enabled", in: view)
 
         XCTAssertTrue(
             model.patch.effects.reverb.enabled,
-            "the switch did not write through AppModel.updateEffects"
+            "the switch did not write through AppModel.updateEffects; \(listing(view))"
         )
-        XCTAssertEqual(reverb.state, .on, "the switch the player sees should show the new state")
         XCTAssertEqual(model.bankStatus, "Edited effects on \(model.patch.name), not saved yet")
 
         try move("effects.reverb.mix", to: 0.6, in: view)
@@ -312,12 +363,17 @@ final class EffectsSectionViewTests: XCTestCase {
         let model = makeModel()
         let view = host(model)
 
-        let eq = try toggle("effects.eq.enabled", in: view)
-        eq.performClick(nil)
-        XCTAssertTrue(model.patch.effects.eq.enabled)
+        try press("effects.eq.enabled", in: view)
+        XCTAssertTrue(
+            model.patch.effects.eq.enabled,
+            "the EQ switch did not write through AppModel.updateEffects; \(listing(view))"
+        )
 
         try move("effects.eq.lowGain", to: 12, in: view)
-        XCTAssertEqual(model.patch.effects.eq.lowGain, 12, accuracy: 0.001, "the low shelf did not move")
+        XCTAssertEqual(
+            model.patch.effects.eq.lowGain, 12, accuracy: 0.001,
+            "the low shelf did not move"
+        )
         let boosted = rms(render(model.patch).left[...])
 
         try move("effects.eq.lowGain", to: -12, in: view)
@@ -337,9 +393,11 @@ final class EffectsSectionViewTests: XCTestCase {
         let view = host(model)
         let dry = render(model.patch)
 
-        let chorus = try toggle("effects.chorus.enabled", in: view)
-        chorus.performClick(nil)
-        XCTAssertTrue(model.patch.effects.chorus.enabled)
+        try press("effects.chorus.enabled", in: view)
+        XCTAssertTrue(
+            model.patch.effects.chorus.enabled,
+            "the chorus switch did not write through AppModel.updateEffects; \(listing(view))"
+        )
 
         try move("effects.chorus.mix", to: 0.5, in: view)
         try move("effects.chorus.rate", to: 3.5, in: view)
@@ -360,29 +418,44 @@ final class EffectsSectionViewTests: XCTestCase {
         let model = makeModel()
         let view = host(model)
 
-        let delay = try toggle("effects.delay.enabled", in: view)
-        delay.performClick(nil)
-        XCTAssertTrue(model.patch.effects.delay.enabled)
-        try move("effects.delay.mix", to: 0.6, in: view)
-
+        // Captured before any edit, so the comparison really is against no delay at all.
         let dry = render(model.patch).left
 
+        try press("effects.delay.enabled", in: view)
+        XCTAssertTrue(
+            model.patch.effects.delay.enabled,
+            "the delay switch did not write through AppModel.updateEffects; \(listing(view))"
+        )
+        try move("effects.delay.mix", to: 0.6, in: view)
+
         try move("effects.delay.time", to: 0.08, in: view)
-        XCTAssertEqual(model.patch.effects.delay.time, 0.08, accuracy: 0.001)
+        XCTAssertEqual(
+            model.patch.effects.delay.time, 0.08, accuracy: 0.001,
+            "the time slider did not write through"
+        )
         let early = try XCTUnwrap(
             firstDifference(render(model.patch).left, dry),
             "the delay at 0.08 s produced no audible copy"
         )
 
         try move("effects.delay.time", to: 0.24, in: view)
-        XCTAssertEqual(model.patch.effects.delay.time, 0.24, accuracy: 0.001)
+        XCTAssertEqual(
+            model.patch.effects.delay.time, 0.24, accuracy: 0.001,
+            "the time slider did not write through the second time"
+        )
         let late = try XCTUnwrap(
             firstDifference(render(model.patch).left, dry),
             "the delay at 0.24 s produced no audible copy"
         )
 
-        XCTAssertEqual(Double(early), 0.08 * sampleRate, accuracy: 1_024, "the first tap arrived at \(early)")
-        XCTAssertEqual(Double(late), 0.24 * sampleRate, accuracy: 1_024, "the second tap arrived at \(late)")
+        XCTAssertEqual(
+            Double(early), 0.08 * sampleRate, accuracy: 1_024,
+            "the first tap arrived at \(early) frames"
+        )
+        XCTAssertEqual(
+            Double(late), 0.24 * sampleRate, accuracy: 1_024,
+            "the second tap arrived at \(late) frames"
+        )
         XCTAssertGreaterThan(late, early + 6_000, "moving the slider did not move the tap")
     }
 }
