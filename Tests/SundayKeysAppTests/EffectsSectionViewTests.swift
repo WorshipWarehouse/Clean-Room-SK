@@ -20,9 +20,10 @@ import SundayKeysCore
 ///   carries neither a target nor an action, and a detached hosting view publishes no
 ///   accessibility elements, so the app ships `EffectsSwitch` - a real checkbox with a real action
 ///   and an `NSView.identifier` - and this file clicks exactly that.
-/// * A SwiftUI `Slider(in: a...b)` is backed by an `NSSlider` whose own range is 0...1, so a value
-///   has to be moved in as a fraction of the panel's range; assigning the logical value directly
-///   clamps to the slider's end (0.08 s landed on 0.1144 s, which is 0.08 of 0.02...1.2).
+/// * A SwiftUI `Slider` cannot even be found. Its backing `NSSlider` carries an empty identifier,
+///   so a query by name has nothing to match and a test is left guessing by position. The app
+///   therefore ships `EffectsSlider`: an `NSSlider` whose own range is the effect's range, whose
+///   action calls `AppModel.updateEffects`, and whose `NSView.identifier` is the control's name.
 ///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
@@ -36,15 +37,15 @@ final class EffectsSectionViewTests: XCTestCase {
     /// The order the panel draws these in, used only when a control carries no identifier: a wrong
     /// pick then fails the assertions instead of passing them.
     private static let toggleOrder = [
-        "effects.eq.enabled", "effects.chorus.enabled", "effects.delay.enabled", "effects.reverb.enabled",
+        "effects.eq.enabled",
+        "effects.chorus.enabled", "effects.delay.enabled", "effects.reverb.enabled",
     ]
     private static let sliderOrder = [
         "effects.eq.lowGain", "effects.eq.highGain", "effects.chorus.mix", "effects.chorus.rate",
         "effects.delay.mix", "effects.delay.time", "effects.reverb.mix", "effects.reverb.decay",
     ]
 
-    /// The range each slider's SwiftUI control declares, which is what a logical value has to be
-    /// converted through to reach the backing control.
+    /// The range each effect accepts, which the shipped slider must carry as its own range.
     private static let sliderRanges: [String: ClosedRange<Double>] = [
         "effects.eq.lowGain": -12...12,
         "effects.eq.highGain": -12...12,
@@ -190,17 +191,15 @@ final class EffectsSectionViewTests: XCTestCase {
         )
     }
 
-    /// Moves a slider the way a pointer would: the value is converted into the backing control's
-    /// own range, the control sends its own action, and the view settles before anything is read.
+    /// Moves a slider the way a pointer would: the value is written into the control the panel
+    /// ships, the control sends its own action, and the view settles before anything is read.
     private func move(_ identifier: String, to value: Double, in view: NSView) throws {
         let slider = try control(identifier, as: NSSlider.self, order: Self.sliderOrder, in: view)
-        let range = try XCTUnwrap(
-            Self.sliderRanges[identifier],
-            "no declared range for \(identifier)"
+        XCTAssertTrue(
+            slider.isEnabled,
+            "\(identifier) is disabled; the stage's switch should have enabled it"
         )
-        let fraction = (value - range.lowerBound) / (range.upperBound - range.lowerBound)
-        let span = slider.maxValue - slider.minValue
-        slider.doubleValue = slider.minValue + fraction * span
+        slider.doubleValue = min(max(value, slider.minValue), slider.maxValue)
         slider.sendAction(slider.action, to: slider.target)
         settle(view)
     }
@@ -342,8 +341,9 @@ final class EffectsSectionViewTests: XCTestCase {
     // MARK: - The panel is really there
 
     /// Layout and labels: the hosting view has a sensible size, the render carries ink rather than
-    /// a blank rectangle, the panel lays out four switches and eight sliders by name, and the stage
-    /// and parameter names are in the tree the player's assistive technology would read.
+    /// a blank rectangle, the panel lays out four switches and eight sliders by name, each slider
+    /// carries its effect's range, and the stage and parameter names are in the tree the player's
+    /// assistive technology would read.
     func testTheShippedPanelLaysOutAndCarriesItsLabels() throws {
         let model = makeModel()
         let view = host(model)
@@ -361,8 +361,9 @@ final class EffectsSectionViewTests: XCTestCase {
             all.compactMap { $0 as? NSButton }.count, EffectsSection.stageTitles.count,
             "the panel should lay out one switch per stage; \(listing(view))"
         )
+        let sliders = all.compactMap { $0 as? NSSlider }
         XCTAssertEqual(
-            all.compactMap { $0 as? NSSlider }.count, Self.sliderOrder.count,
+            sliders.count, Self.sliderOrder.count,
             "the panel should lay out two sliders per stage; \(listing(view))"
         )
 
@@ -372,6 +373,17 @@ final class EffectsSectionViewTests: XCTestCase {
                 names.contains(identifier),
                 "the rendered panel carries no control named \(identifier); \(listing(view))"
             )
+        }
+
+        // The range a pointer can reach is the range the effect accepts, not a normalised 0...1.
+        for slider in sliders {
+            let identifier = name(of: slider)
+            let range = try XCTUnwrap(
+                Self.sliderRanges[identifier],
+                "a slider carries the unexpected name \(identifier); \(listing(view))"
+            )
+            XCTAssertEqual(slider.minValue, range.lowerBound, accuracy: 1e-9, "\(identifier) min")
+            XCTAssertEqual(slider.maxValue, range.upperBound, accuracy: 1e-9, "\(identifier) max")
         }
 
         let seen = accessibilityStrings(in: view) + textFieldStrings(in: view)
@@ -389,7 +401,8 @@ final class EffectsSectionViewTests: XCTestCase {
 
     // MARK: - The controls reach the model and the sound
 
-    /// The reverb switch. Clicking the checkbox the panel draws must enable the stage through
+    /// The reverb switch.
+    /// Clicking the checkbox the panel draws must enable the stage through
     /// `AppModel.updateEffects`, update the model's status line, and change the samples.
     func testTheReverbSwitchReachesTheModelAndTheAudio() throws {
         let model = makeModel()
@@ -466,36 +479,44 @@ final class EffectsSectionViewTests: XCTestCase {
 
     /// The delay's single `time` control, measured as where the delayed copy arrives: 0.08 s is
     /// 3,840 frames at 48 kHz and 0.24 s is 11,520, so moving the slider must move the first
-    /// difference between the delayed render and the dry one.
+    /// difference between a render that carries the copy inside the window and one that does not.
     func testTheDelayTimeSliderMovesTheTapInTheRenderedSamples() throws {
         let model = makeModel()
         let view = host(model)
-
-        // Captured before any edit, so the comparison really is against no delay at all.
-        let dry = render(model.patch).left
 
         try press("effects.delay.enabled", in: view) { model.patch.effects.delay.enabled }
         XCTAssertTrue(model.patch.effects.delay.enabled)
         try move("effects.delay.mix", to: 0.6, in: view)
 
+        // A tap at 1.0 s falls past the 60 blocks rendered here (30,720 frames, 0.64 s), so this
+        // render carries the same dry path at the same mix with no copy inside the window: the
+        // baseline both taps are measured against. Comparing against a bypassed render instead
+        // would find the attack, because enabling the stage attenuates the dry path at frame 7.
+        try move("effects.delay.time", to: 1.0, in: view)
+        XCTAssertEqual(
+            model.patch.effects.delay.time, 1.0, accuracy: 0.001,
+            "the time slider did not write through"
+        )
+        let withoutCopy = render(model.patch).left
+
         try move("effects.delay.time", to: 0.08, in: view)
         XCTAssertEqual(
             model.patch.effects.delay.time, 0.08, accuracy: 0.001,
-            "the time slider did not write through"
+            "the time slider did not write 0.08 s"
         )
         let early = try XCTUnwrap(
-            firstDifference(render(model.patch).left, dry),
-            "the delay at 0.08 s produced no audible copy"
+            firstDifference(render(model.patch).left, withoutCopy),
+            "the delay at 0.08 s produced no copy inside the window"
         )
 
         try move("effects.delay.time", to: 0.24, in: view)
         XCTAssertEqual(
             model.patch.effects.delay.time, 0.24, accuracy: 0.001,
-            "the time slider did not write through the second time"
+            "the time slider did not write 0.24 s"
         )
         let late = try XCTUnwrap(
-            firstDifference(render(model.patch).left, dry),
-            "the delay at 0.24 s produced no audible copy"
+            firstDifference(render(model.patch).left, withoutCopy),
+            "the delay at 0.24 s produced no copy inside the window"
         )
 
         XCTAssertEqual(

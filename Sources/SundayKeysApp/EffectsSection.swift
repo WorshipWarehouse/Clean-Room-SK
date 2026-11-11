@@ -10,9 +10,13 @@ import SundayKeysCore
 /// `AppModel.updateEffects`, which republishes the patch to the render thread without releasing a
 /// held note.
 ///
-/// The switches are `EffectsSwitch`, a real AppKit checkbox with an action, rather than a SwiftUI
-/// `Toggle`: a hosted toggle outside a window has nothing to operate it, while a checkbox is the
-/// same control for a pointer, for assistive technology and for the app's own tests.
+/// Every control is an AppKit view with a real action - `EffectsSwitch` for the bypass switch and
+/// `EffectsSlider` for a range - rather than a SwiftUI `Toggle` or `Slider`. A hosted SwiftUI
+/// control outside a window draws and reports its state but cannot be operated: the
+/// `FocusRingNSButton` behind a toggle carries neither a target nor an action, the `NSSlider`
+/// behind a slider carries no identifier, and a detached hosting view publishes no accessibility
+/// elements. A native control leaves one control for the pointer, for assistive technology and for
+/// the app's own tests, and its action is the one that calls `AppModel.updateEffects`.
 struct EffectsSection: View {
     @ObservedObject var model: AppModel
 
@@ -43,9 +47,9 @@ struct EffectsSection: View {
 
     // MARK: - Rows
 
-    /// One stage: its bypass switch, its name, and the controls that stage owns. The controls are
-    /// disabled while the stage is bypassed, so a slider never looks live on a stage that is not
-    /// running - which is also why a caller enables the switch before moving them.
+    /// One stage: its bypass switch, its name, and the controls that stage owns. A slider is
+    /// disabled while the stage is bypassed, so it never looks live on a stage that is not running
+    /// - which is also why a caller enables the switch before moving them.
     private func effectRow<Controls: View>(
         title: String,
         identifier: String,
@@ -62,7 +66,6 @@ struct EffectsSection: View {
                 .font(.system(.callout, design: .monospaced))
 
             controls()
-                .disabled(!isOn)
 
             Spacer()
         }
@@ -76,27 +79,25 @@ struct EffectsSection: View {
             set: { value in model.updateEffects { $0.eq.enabled = value } }
         ) {
             parameter("low")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.eq.lowGain) },
-                    set: { value in model.updateEffects { $0.eq.lowGain = Float(value) } }
-                ),
-                in: -12...12
+            EffectsSlider(
+                identifier: "effects.eq.lowGain",
+                value: Double(model.patch.effects.eq.lowGain),
+                range: -12...12,
+                isEnabled: model.patch.effects.eq.enabled,
+                set: { value in model.updateEffects { $0.eq.lowGain = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.eq.lowGain")
             reading(String(format: "%+.1f dB", model.patch.effects.eq.lowGain), width: 66)
 
             parameter("high")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.eq.highGain) },
-                    set: { value in model.updateEffects { $0.eq.highGain = Float(value) } }
-                ),
-                in: -12...12
+            EffectsSlider(
+                identifier: "effects.eq.highGain",
+                value: Double(model.patch.effects.eq.highGain),
+                range: -12...12,
+                isEnabled: model.patch.effects.eq.enabled,
+                set: { value in model.updateEffects { $0.eq.highGain = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.eq.highGain")
             reading(String(format: "%+.1f dB", model.patch.effects.eq.highGain), width: 66)
         }
     }
@@ -109,27 +110,25 @@ struct EffectsSection: View {
             set: { value in model.updateEffects { $0.chorus.enabled = value } }
         ) {
             parameter("mix")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.chorus.mix) },
-                    set: { value in model.updateEffects { $0.chorus.mix = Float(value) } }
-                ),
-                in: 0...1
+            EffectsSlider(
+                identifier: "effects.chorus.mix",
+                value: Double(model.patch.effects.chorus.mix),
+                range: 0...1,
+                isEnabled: model.patch.effects.chorus.enabled,
+                set: { value in model.updateEffects { $0.chorus.mix = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.chorus.mix")
             reading(String(format: "%.2f", model.patch.effects.chorus.mix), width: 42)
 
             parameter("rate")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.chorus.rate) },
-                    set: { value in model.updateEffects { $0.chorus.rate = Float(value) } }
-                ),
-                in: 0.05...6
+            EffectsSlider(
+                identifier: "effects.chorus.rate",
+                value: Double(model.patch.effects.chorus.rate),
+                range: 0.05...6,
+                isEnabled: model.patch.effects.chorus.enabled,
+                set: { value in model.updateEffects { $0.chorus.rate = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.chorus.rate")
             reading(String(format: "%.2f Hz", model.patch.effects.chorus.rate), width: 66)
         }
     }
@@ -142,27 +141,25 @@ struct EffectsSection: View {
             set: { value in model.updateEffects { $0.delay.enabled = value } }
         ) {
             parameter("mix")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.delay.mix) },
-                    set: { value in model.updateEffects { $0.delay.mix = Float(value) } }
-                ),
-                in: 0...1
+            EffectsSlider(
+                identifier: "effects.delay.mix",
+                value: Double(model.patch.effects.delay.mix),
+                range: 0...1,
+                isEnabled: model.patch.effects.delay.enabled,
+                set: { value in model.updateEffects { $0.delay.mix = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.delay.mix")
             reading(String(format: "%.2f", model.patch.effects.delay.mix), width: 42)
 
             parameter("time")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.delay.time) },
-                    set: { value in model.updateEffects { $0.delay.time = Float(value) } }
-                ),
-                in: 0.02...1.2
+            EffectsSlider(
+                identifier: "effects.delay.time",
+                value: Double(model.patch.effects.delay.time),
+                range: 0.02...1.2,
+                isEnabled: model.patch.effects.delay.enabled,
+                set: { value in model.updateEffects { $0.delay.time = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.delay.time")
             reading(String(format: "%.3f s", model.patch.effects.delay.time), width: 66)
         }
     }
@@ -175,27 +172,25 @@ struct EffectsSection: View {
             set: { value in model.updateEffects { $0.reverb.enabled = value } }
         ) {
             parameter("mix")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.reverb.mix) },
-                    set: { value in model.updateEffects { $0.reverb.mix = Float(value) } }
-                ),
-                in: 0...1
+            EffectsSlider(
+                identifier: "effects.reverb.mix",
+                value: Double(model.patch.effects.reverb.mix),
+                range: 0...1,
+                isEnabled: model.patch.effects.reverb.enabled,
+                set: { value in model.updateEffects { $0.reverb.mix = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.reverb.mix")
             reading(String(format: "%.2f", model.patch.effects.reverb.mix), width: 42)
 
             parameter("decay")
-            Slider(
-                value: Binding(
-                    get: { Double(model.patch.effects.reverb.decay) },
-                    set: { value in model.updateEffects { $0.reverb.decay = Float(value) } }
-                ),
-                in: 0...1
+            EffectsSlider(
+                identifier: "effects.reverb.decay",
+                value: Double(model.patch.effects.reverb.decay),
+                range: 0...1,
+                isEnabled: model.patch.effects.reverb.enabled,
+                set: { value in model.updateEffects { $0.reverb.decay = Float(value) } }
             )
             .frame(width: 120)
-            .accessibilityIdentifier("effects.reverb.decay")
             reading(String(format: "%.2f", model.patch.effects.reverb.decay), width: 42)
         }
     }
