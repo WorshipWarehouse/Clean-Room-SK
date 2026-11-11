@@ -91,7 +91,11 @@ final class AppModel: ObservableObject {
     /// The target waiting for a control change, if the player pressed Learn.
     @Published private(set) var learningTarget: ControllerTarget?
 
-    private let audio = AudioEngineController()
+        private let audio: AudioEngineController
+    /// The clock the arpeggiator's grid reads. Injected so a test can move time
+    /// by hand; the panel is built over this one value, so the window, the tests
+    /// and the service all read the same clock.
+    private let clock: HostClock
     private let midi = MIDIInputService()
     private let store = PatchStore(url: PatchStore.defaultURL())
     /// The patch the last launch ended on. It lives in its own file beside the bank,
@@ -113,15 +117,25 @@ final class AppModel: ObservableObject {
     /// property initialiser cannot read another one. Every control the player
     /// touches goes through it, so the window and the service hold one value.
     private lazy var arpeggiator = ArpeggiatorPanel(
-        clock: SystemHostClock(),
+                clock: clock,
         target: audio
     )
-    private var meter: Timer?
+        private var meter: Timer?
+    /// Ticks the step clock while the engine runs. `StepClock` keeps the grid and
+    /// emits every step it missed, so this only bounds how late a step can reach
+    /// the voices. The interval is this repository's own choice.
+    private var stepTicker: Timer?
     /// The session seam this launch was given. Nil means the app runs local-first:
     /// no request is made and no licence verdict is invented.
     private let sessionClient: SessionClient?
 
-    init(sessionClient: SessionClient? = nil) {
+        init(
+        sessionClient: SessionClient? = nil,
+        clock: HostClock = SystemHostClock(),
+        audio: AudioEngineController = AudioEngineController()
+    ) {
+        self.clock = clock
+        self.audio = audio
         self.sessionClient = sessionClient
         if sessionClient == nil {
             apply(.unknown(Self.noClientReason))
@@ -160,8 +174,9 @@ final class AppModel: ObservableObject {
             do {
                 try audio.start()
                 isEngineRunning = true
-                statusMessage = "Engine running at \(Int(audio.sampleRate)) Hz"
+                                statusMessage = "Engine running at \(Int(audio.sampleRate)) Hz"
                 startMeter()
+                startStepTicker()
             } catch {
                 statusMessage = "Engine failed: \(error.localizedDescription)"
             }
@@ -193,8 +208,10 @@ final class AppModel: ObservableObject {
     }
 
     func stop() {
-        meter?.invalidate()
+                meter?.invalidate()
         meter = nil
+        stepTicker?.invalidate()
+        stepTicker = nil
         arpeggiator.allNotesOff()
         publishArpeggiator()
         audio.stop()
@@ -710,24 +727,58 @@ final class AppModel: ObservableObject {
             lastEvent = "refused \(noteName(note)): \(licenceGate.line)"
             return
         }
-        heldNotes.insert(note)
+                heldNotes.insert(note)
+        // With the arpeggiator on, a key is a note for the pattern rather than a
+        // voice: the panel holds it and the step clock decides when it sounds.
+        if arpeggiator.isEnabled {
+            arpeggiator.keyDown(note: note, velocity: velocity)
+            publishArpeggiator()
+            lastEvent = "arp \(noteName(note)) on"
+            return
+        }
         audio.noteOn(note: note, velocity: velocity)
         lastEvent = "key \(noteName(note)) on"
     }
 
     func keyUp(_ note: UInt8) {
-        guard heldNotes.remove(note) != nil else { return }
+                guard heldNotes.remove(note) != nil else { return }
+        if arpeggiator.isEnabled {
+            arpeggiator.keyUp(note: note)
+            publishArpeggiator()
+            lastEvent = "arp \(noteName(note)) off"
+            return
+        }
         audio.noteOff(note: note)
         lastEvent = "key \(noteName(note)) off"
     }
 
     func panic() {
-        heldNotes.removeAll()
+                heldNotes.removeAll()
+        arpeggiator.allNotesOff()
+        publishArpeggiator()
         audio.allNotesOff()
         lastEvent = "all notes off"
     }
 
     // MARK: - Internals
+
+        /// Emits every step the host's time has reached. The caller that owns time
+    /// decides when: `stepTicker` in the app, the test itself in a test.
+    func tickArpeggiator() {
+        guard arpeggiator.isEnabled else { return }
+        arpeggiator.tick()
+        if arpeggiator.statusLine != arpeggiatorStatus {
+            publishArpeggiator()
+        }
+    }
+
+    /// Starts the ticker that drives the arpeggiator while the engine runs.
+    private func startStepTicker() {
+        stepTicker?.invalidate()
+        stepTicker = Timer.scheduledTimer(withTimeInterval: 0.005, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tickArpeggiator() }
+        }
+    }
 
     private func startMeter() {
         meter?.invalidate()
@@ -780,11 +831,25 @@ extension AppModel: MIDIEventTransport {
             lastEvent = "refused note \(noteName(note)) ch \(channel + 1): \(licenceGate.line)"
             return
         }
+                // A controller plays the pattern too, so a stepped run reaches the voices
+        // from the same place a hand-played note does.
+        if arpeggiator.isEnabled {
+            arpeggiator.keyDown(note: note, velocity: velocity)
+            publishArpeggiator()
+            lastEvent = "arp note on \(noteName(note)) velocity \(velocity) ch \(channel + 1)"
+            return
+        }
         audio.noteOn(note: note, velocity: velocity)
         lastEvent = "note on \(noteName(note)) velocity \(velocity) ch \(channel + 1)"
     }
 
     func noteOff(note: UInt8, velocity: UInt8, channel: UInt8) {
+                if arpeggiator.isEnabled {
+            arpeggiator.keyUp(note: note)
+            publishArpeggiator()
+            lastEvent = "arp note off \(noteName(note)) ch \(channel + 1)"
+            return
+        }
         audio.noteOff(note: note)
         lastEvent = "note off \(noteName(note)) ch \(channel + 1)"
     }
