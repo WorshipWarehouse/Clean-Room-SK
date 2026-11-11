@@ -35,10 +35,11 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       (15.7%) — the chain costs 1.7x the dry path. CI fails if the engaged median takes more than a
       quarter of the block or if any single block overruns it, and `.github/workflows/budget.yml`
       prints the numbers as annotations on a pass as well as a failure.
-- [x] **Instrument catalogue** — `InstrumentCatalogue` in `Sources/SundayKeysCore/Catalogue/InstrumentCatalogue.swift`
-      ships five original synthesised voices (`keys`, `bell`, `pad`, `organ`, `electricPiano`) built from
-      `WaveTable`, and the array's index is the render thread's table rung. `KeyLayer.instrument` is the
-      stored selection, with `timbre` kept as a computed legacy view so a pre-catalogue bank still loads;
+- [x] **Instrument catalogue** — `InstrumentCatalogue` in
+      `Sources/SundayKeysCore/Catalogue/InstrumentCatalogue.swift` ships five original synthesised
+      voices (`keys`, `bell`, `pad`, `organ`, `electricPiano`) built from `WaveTable`, and the array's
+      index is the render thread's table rung. `KeyLayer.instrument` is the stored selection, with
+      `timbre` kept as a computed legacy view so a pre-catalogue bank still loads;
       `PolyphonicInstrument` reads one table strip and a layer's rung rather than a bell flag;
       `RealtimeKeysoundEngine.setPatch` publishes every layer's rung on the same lock-free path the
       timbres used; the layer editor's picker offers the catalogue through
@@ -48,6 +49,13 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       a tone at least 0.05 apart after the attack, an engine retargeted by `setPatch` rendering
       sample-identical audio to one built on that instrument (1e-6), and `releasingVoices: false` keeping
       the held voice.
+- [x] **Strict-concurrency scheduling** — the check is unchanged in substance and now lives in
+      `tools/strict_concurrency.sh` (compile with `-strict-concurrency=complete`, prove the flag reached
+      `swiftc`, inventory every primary diagnostic, gate the MIDI routing seam). What changed is when it
+      is scheduled: `.github/workflows/concurrency.yml` no longer triggers on `push`, it triggers on
+      `workflow_run` of `build` completing on `main` and checks out
+      `github.event.workflow_run.head_sha`, so the strict job no longer competes with the build for a
+      macOS runner. Evidence: `docs/re/ci-runner-queue.md`.
 
 ## Next
 - [ ] **Effects panel coverage** — the panel controls exist and write through `AppModel.updateEffects`,
@@ -81,5 +89,8 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
 
 ## How an item is closed
 A box is ticked only when the change is on `main` and the workflows for that head are terminal green:
-build with its `Test` step, plus click, patch-transfer, session and concurrency. A run that never
-picked up a runner is not evidence and is cancelled and re-run.
+build with its `Test` step, plus click, patch-transfer, session and concurrency. `concurrency` starts
+when the build for the same commit finishes, by design, so it appears later than the rest of the set and
+it checks out the commit the build ran for; what makes it evidence is that it runs and succeeds, not
+that it queued early. A run that never picks up a runner is not evidence: it is cancelled or re-run and
+the reason is recorded.

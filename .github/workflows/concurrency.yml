@@ -1,17 +1,27 @@
 name: concurrency
 
+# The proof that the MIDI routing seam compiles with complete concurrency
+# checking. Its substance is unchanged: tools/strict_concurrency.sh.
+#
+# When it runs was the problem. Started by the same push as the build, its
+# job sat queued with no runner attached for four attempts while the build
+# beside it got one, and only a fresh dispatch ran it. It now starts when the
+# build for the same commit has finished, which takes it out of the burst
+# that starves it, and it checks out the commit that build ran for rather
+# than whatever the branch tip is by then.
 on:
-  push:
+  workflow_run:
+    workflows: [build]
+    types: [completed]
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A newer push supersedes the older run: the branch tip is what has to be green.
+# One group per commit: a re-run of the same head supersedes the older one.
 concurrency:
-  group: concurrency-${{ github.ref }}
+  group: strict-${{ github.event.workflow_run.head_sha }}
   cancel-in-progress: true
 
 jobs:
@@ -20,60 +30,23 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Report the commit under test
+        run: git rev-parse HEAD
 
       - name: Report the toolchain
-        run: |
-          set -o pipefail
-          xcode-select -p
-          swift --version
+        run: swift --version
 
-      # Complete concurrency checking without warnings-as-errors, so one
-      # diagnostic cannot hide the rest: the whole inventory is printed and the
-      # gate below decides what is a failure.
       - name: Build with complete concurrency checking
-        run: |
-          set -o pipefail
-          swift build --build-tests -v \
-            -Xswiftc -strict-concurrency=complete 2>&1 | tee /tmp/strict.log
+        run: bash tools/strict_concurrency.sh build
 
-      # A gate that passes because the flag was spelled wrong is worse than no
-      # gate, so the flag is proven to have reached the compiler.
       - name: Prove the flag reached the compiler
-        run: |
-          set -o pipefail
-          if ! grep -q -- "-strict-concurrency=complete" /tmp/strict.log; then
-            echo "::error::the strict-concurrency flag never reached swiftc"
-            exit 1
-          fi
-          echo "strict-concurrency=complete was passed to the compiler"
+        run: bash tools/strict_concurrency.sh flag
 
-      # Only a primary diagnostic line (path:line:column: warning:) carries the
-      # file, so those are what get reported and what the gate inspects.
-      # Continuation lines are source snippets and would report no location.
       - name: Report every concurrency diagnostic
-        run: |
-          set -o pipefail
-          primary='^/.*\.swift:[0-9]+:[0-9]+: (warning|error):'
-          total=$(grep -cE "$primary" /tmp/strict.log || true)
-          echo "diagnostics in the strict build: ${total:-0}"
-          { grep -E "$primary" /tmp/strict.log || true; } \
-            | sed -E "s#^${PWD}/##" \
-            | sort -u > /tmp/strict-primary.log
-          { cut -d: -f1 /tmp/strict-primary.log || true; } | sort | uniq -c | sort -rn
-          while IFS= read -r line; do
-            file=${line%%:*}
-            echo "::warning file=${file}::${line#*: }"
-          done < /tmp/strict-primary.log
+        run: bash tools/strict_concurrency.sh report
 
-      # The MIDI routing seam is gated: the transport protocol, its router, the
-      # app model that conforms to it and the suite that exercises it. A new
-      # isolation diagnostic in any of them fails this job.
       - name: Fail on diagnostics in the MIDI routing seam
-        run: |
-          set -o pipefail
-          seam='Sources/SundayKeysCore/MIDI/|Sources/SundayKeysApp/AppModel.swift|Tests/SundayKeysCoreTests/MIDIEventRoutingTests.swift'
-          if grep -E '^/.*\.swift:[0-9]+:[0-9]+: (warning|error):' /tmp/strict.log | grep -E "$seam"; then
-            echo "::error::strict concurrency diagnostics in the MIDI routing seam"
-            exit 1
-          fi
-          echo "no strict concurrency diagnostics in the MIDI routing seam"
+        run: bash tools/strict_concurrency.sh gate
