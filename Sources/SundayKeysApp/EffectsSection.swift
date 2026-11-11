@@ -1,18 +1,18 @@
 import SwiftUI
 import SundayKeysCore
 
-/// The effects panel the window shows: EQ, chorus, delay and reverb, each with its bypass
-/// switch and the controls that stage owns.
+/// The effects panel the window shows: EQ, chorus, delay and reverb, each with its bypass switch
+/// and the controls that stage owns.
 ///
-/// It is a type of its own rather than a private property of `ContentView` so the panel that
-/// ships is also the panel a test can lay out, render and drive: a control cannot exist in the
-/// window and be missing from the test, because both are the same view. Every control writes
-/// through `AppModel.updateEffects`, which republishes the patch to the render thread without
-/// releasing a held note.
+/// It is a type of its own rather than a private property of `ContentView` so the panel that ships
+/// is also the panel a test can lay out, render and drive: a control cannot exist in the window and
+/// be missing from the test, because both are the same view. Every control writes through
+/// `AppModel.updateEffects`, which republishes the patch to the render thread without releasing a
+/// held note.
 ///
-/// The identifiers below are the names the controls carry into the accessibility tree, which is
-/// how a player's assistive technology finds them - and, in the app's own test target, how the
-/// offscreen cases reach the same control a pointer would.
+/// The switches are `EffectsSwitch`, a real AppKit checkbox with an action, rather than a SwiftUI
+/// `Toggle`: a hosted toggle outside a window has nothing to operate it, while a checkbox is the
+/// same control for a pointer, for assistive technology and for the app's own tests.
 struct EffectsSection: View {
     @ObservedObject var model: AppModel
 
@@ -43,27 +43,26 @@ struct EffectsSection: View {
 
     // MARK: - Rows
 
-    /// One stage: its bypass switch, its name, and the controls that stage owns. The controls
-    /// are disabled while the stage is bypassed, so a slider never looks live on a stage that is
-    /// not running - which is also why a caller enables the switch before moving them.
+    /// One stage: its bypass switch, its name, and the controls that stage owns. The controls are
+    /// disabled while the stage is bypassed, so a slider never looks live on a stage that is not
+    /// running - which is also why a caller enables the switch before moving them.
     private func effectRow<Controls: View>(
         title: String,
         identifier: String,
-        toggle: Binding<Bool>,
+        isOn: Bool,
+        set: @escaping (Bool) -> Void,
         @ViewBuilder controls: () -> Controls
     ) -> some View {
         HStack(spacing: 10) {
-            Toggle("", isOn: toggle)
-                .labelsHidden()
-                .toggleStyle(.checkbox)
-                .accessibilityIdentifier(identifier)
+            EffectsSwitch(identifier: identifier, isOn: isOn, set: set)
+                .fixedSize()
 
             Text(title)
                 .frame(width: 64, alignment: .leading)
                 .font(.system(.callout, design: .monospaced))
 
             controls()
-                .disabled(!toggle.wrappedValue)
+                .disabled(!isOn)
 
             Spacer()
         }
@@ -73,10 +72,8 @@ struct EffectsSection: View {
         effectRow(
             title: "EQ",
             identifier: "effects.eq.enabled",
-            toggle: Binding(
-                get: { model.patch.effects.eq.enabled },
-                set: { value in model.updateEffects { $0.eq.enabled = value } }
-            )
+            isOn: model.patch.effects.eq.enabled,
+            set: { value in model.updateEffects { $0.eq.enabled = value } }
         ) {
             parameter("low")
             Slider(
@@ -108,10 +105,8 @@ struct EffectsSection: View {
         effectRow(
             title: "Chorus",
             identifier: "effects.chorus.enabled",
-            toggle: Binding(
-                get: { model.patch.effects.chorus.enabled },
-                set: { value in model.updateEffects { $0.chorus.enabled = value } }
-            )
+            isOn: model.patch.effects.chorus.enabled,
+            set: { value in model.updateEffects { $0.chorus.enabled = value } }
         ) {
             parameter("mix")
             Slider(
@@ -143,10 +138,8 @@ struct EffectsSection: View {
         effectRow(
             title: "Delay",
             identifier: "effects.delay.enabled",
-            toggle: Binding(
-                get: { model.patch.effects.delay.enabled },
-                set: { value in model.updateEffects { $0.delay.enabled = value } }
-            )
+            isOn: model.patch.effects.delay.enabled,
+            set: { value in model.updateEffects { $0.delay.enabled = value } }
         ) {
             parameter("mix")
             Slider(
@@ -178,10 +171,8 @@ struct EffectsSection: View {
         effectRow(
             title: "Reverb",
             identifier: "effects.reverb.enabled",
-            toggle: Binding(
-                get: { model.patch.effects.reverb.enabled },
-                set: { value in model.updateEffects { $0.reverb.enabled = value } }
-            )
+            isOn: model.patch.effects.reverb.enabled,
+            set: { value in model.updateEffects { $0.reverb.enabled = value } }
         ) {
             parameter("mix")
             Slider(

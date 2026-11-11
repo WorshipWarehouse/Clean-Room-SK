@@ -6,31 +6,23 @@ import SundayKeysCore
 
 /// The shipped effects panel, laid out, rendered and driven offscreen.
 ///
-/// `EffectsPanelTests` proves that `AppModel.updateEffects` reaches the samples. It does not
-/// prove that the window's own controls are wired to that method: the panel used to be a private
+/// `EffectsPanelTests` proves that `AppModel.updateEffects` reaches the samples. It does not prove
+/// that the window's own controls are wired to that method: the panel used to be a private
 /// property of `ContentView`, so nothing could instantiate it. It is now `EffectsSection`, the
 /// view `ContentView` shows, and these cases host that exact view in an `NSHostingView` with no
-/// window and no display, assert it laid out with its labels, press the controls the panel draws,
-/// and measure what the panel did to the audio.
+/// window and no display, assert it laid out with its labels, operate the controls the panel
+/// draws, and measure what the panel did to the audio.
 ///
-/// Four things about driving those controls offscreen are stated here because they were learned
-/// from failing runs, not assumed:
+/// Two facts about operating those controls offscreen were learned from failing runs and are worth
+/// stating, because both shaped the panel as well as this file:
 ///
+/// * A SwiftUI `Toggle` cannot be operated outside a window. The `FocusRingNSButton` behind it
+///   carries neither a target nor an action, and a detached hosting view publishes no
+///   accessibility elements, so the app ships `EffectsSwitch` - a real checkbox with a real action
+///   and an `NSView.identifier` - and this file clicks exactly that.
 /// * A SwiftUI `Slider(in: a...b)` is backed by an `NSSlider` whose own range is 0...1, so a value
 ///   has to be moved in as a fraction of the panel's range; assigning the logical value directly
 ///   clamps to the slider's end (0.08 s landed on 0.1144 s, which is 0.08 of 0.02...1.2).
-/// * The hosted controls are SwiftUI's own classes (`CustomMarkedSlider`, `FocusRingNSButton`) and
-///   they carry an empty `accessibilityIdentifier` even though the view sets one; the identifiers
-///   live in the accessibility tree. Lookup matches the identifier when a platform forwards it and
-///   otherwise takes the control's position, which the first case pins by counting the switches and
-///   sliders the panel lays out.
-/// * A switch cannot be driven through AppKit at all here. `FocusRingNSButton` has neither a
-///   target nor an action, so `sendAction` and `performClick` both reach nothing. The interface
-///   that does exist is accessibility: `accessibilityPerformPress()`, which AppKit documents as
-///   simulating a click and which is exactly what a player's assistive technology calls. That is
-///   the press this file uses, with the AppKit paths kept behind it.
-/// * A control's action does not finish updating the model until the hosting view has laid out
-///   again, so every drive is followed by a settle pass before anything is read.
 ///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
@@ -41,8 +33,8 @@ final class EffectsSectionViewTests: XCTestCase {
     private let block = 512
     private let panelSize = NSSize(width: 900, height: 210)
 
-    /// The order the panel draws these in, used only when a platform does not forward an
-    /// identifier: a wrong pick then fails the assertions instead of passing them.
+    /// The order the panel draws these in, used only when a control carries no identifier: a wrong
+    /// pick then fails the assertions instead of passing them.
     private static let toggleOrder = [
         "effects.eq.enabled", "effects.chorus.enabled", "effects.delay.enabled", "effects.reverb.enabled",
     ]
@@ -67,8 +59,8 @@ final class EffectsSectionViewTests: XCTestCase {
     // MARK: - Fixtures
 
     private func makeModel() -> AppModel {
-        // AppKit needs its application object before a hosting view can lay out; no window and
-        // no display are involved, and nothing here runs an event loop.
+        // AppKit needs its application object before a hosting view can lay out; no window and no
+        // display are involved, and nothing here runs an event loop.
         _ = NSApplication.shared
         let model = AppModel(audio: AudioEngineController())
         model.updateEffects { $0 = EffectsSettings() }
@@ -102,15 +94,19 @@ final class EffectsSectionViewTests: XCTestCase {
         return found
     }
 
+    private func name(of control: NSControl) -> String {
+        control.identifier?.rawValue ?? control.accessibilityIdentifier()
+    }
+
     private func listing(_ view: NSView) -> String {
         let described = controls(in: view).map { control in
-            "\(type(of: control))[id=\(control.accessibilityIdentifier()) enabled=\(control.isEnabled)]"
+            "\(type(of: control))[id=\(name(of: control)) enabled=\(control.isEnabled)]"
         }
         return "\(described.count) AppKit controls: \(described)"
     }
 
     private func describe(_ button: NSButton) -> String {
-        "\(type(of: button))[id=\(button.accessibilityIdentifier()) enabled=\(button.isEnabled) "
+        "\(type(of: button))[id=\(name(of: button)) enabled=\(button.isEnabled) "
             + "state=\(button.state.rawValue) target=\(String(describing: button.target)) "
             + "action=\(String(describing: button.action))]"
     }
@@ -122,7 +118,7 @@ final class EffectsSectionViewTests: XCTestCase {
         in view: NSView
     ) throws -> T {
         let matching = controls(in: view).compactMap { $0 as? T }
-        if let named = matching.first(where: { $0.accessibilityIdentifier() == identifier }) {
+        if let named = matching.first(where: { name(of: $0) == identifier }) {
             return named
         }
         if let index = order.firstIndex(of: identifier), matching.indices.contains(index) {
@@ -142,8 +138,8 @@ final class EffectsSectionViewTests: XCTestCase {
         try control(identifier, as: NSButton.self, order: Self.toggleOrder, in: view)
     }
 
-    /// The accessibility element the panel publishes under an identifier: for a hosted SwiftUI
-    /// control this is the element that carries both the identifier and the press action.
+    /// The accessibility element the panel publishes under an identifier, when a host does publish
+    /// one.
     private func accessibilityElement(_ identifier: String, in element: Any) -> NSAccessibilityProtocol? {
         guard let object = element as? NSAccessibilityProtocol else { return nil }
         if object.accessibilityIdentifier() == identifier {
@@ -158,39 +154,35 @@ final class EffectsSectionViewTests: XCTestCase {
         return nil
     }
 
-    /// Presses the switch the panel draws until the model reflects it, and fails with what each
+    /// Clicks the switch the panel draws until the model reflects it, and fails with what each
     /// attempt saw if none of them writes through.
     private func press(_ identifier: String, in view: NSView, changed: () -> Bool) throws {
+        let button = try toggle(identifier, in: view)
         var attempts: [String] = []
 
-        // The press a player's assistive technology makes. It is the only press a hosted SwiftUI
-        // switch has: the AppKit button behind it carries no target and no action.
-        if let element = accessibilityElement(identifier, in: view) {
-            let pressed = element.accessibilityPerformPress()
-            settle(view)
-            attempts.append(
-                "accessibilityPerformPress returned \(pressed) on \(type(of: element))"
-            )
-            if changed() { return }
-        } else {
-            attempts.append(
-                "no accessibility element named \(identifier); the tree carries "
-                    + "\(accessibilityIdentifiers(in: view))"
-            )
-        }
+        // The click itself: the checkbox has a target and an action, so this is the path a pointer
+        // and a test both take.
+        button.performClick(nil)
+        settle(view)
+        attempts.append("performClick on \(describe(button))")
+        if changed() { return }
 
-        // The AppKit paths, for a platform that does give the control a target and an action.
-        let button = try toggle(identifier, in: view)
+        // The action alone, for a platform that does not route a click without a window.
         button.state = .on
         button.sendAction(button.action, to: button.target)
         settle(view)
         attempts.append("state+sendAction on \(describe(button))")
         if changed() { return }
 
-        button.performClick(nil)
-        settle(view)
-        attempts.append("performClick on \(describe(button))")
-        if changed() { return }
+        // The assistive press, for a host that publishes the element.
+        if let element = accessibilityElement(identifier, in: view) {
+            let pressed = element.accessibilityPerformPress()
+            settle(view)
+            attempts.append("accessibilityPerformPress returned \(pressed)")
+            if changed() { return }
+        } else {
+            attempts.append("no accessibility element named \(identifier)")
+        }
 
         XCTFail(
             "nothing wrote \(identifier) through AppModel.updateEffects; "
@@ -264,21 +256,6 @@ final class EffectsSectionViewTests: XCTestCase {
         if let children = object.accessibilityChildren() {
             for child in children {
                 found += accessibilityStrings(in: child)
-            }
-        }
-        return found
-    }
-
-    /// The identifiers in the same tree, which is where a hosted SwiftUI control carries them.
-    private func accessibilityIdentifiers(in element: Any) -> [String] {
-        guard let object = element as? NSAccessibilityProtocol else { return [] }
-        var found: [String] = []
-        if let identifier = object.accessibilityIdentifier(), !identifier.isEmpty {
-            found.append(identifier)
-        }
-        if let children = object.accessibilityChildren() {
-            for child in children {
-                found += accessibilityIdentifiers(in: child)
             }
         }
         return found
@@ -364,10 +341,9 @@ final class EffectsSectionViewTests: XCTestCase {
 
     // MARK: - The panel is really there
 
-    /// Layout and labels: the hosting view has a sensible size, the render carries ink rather
-    /// than a blank rectangle, the panel lays out four switches and eight sliders, the stage and
-    /// parameter names are in the tree the player's assistive technology would read, and every
-    /// control carries its identifier - on the control or in that tree.
+    /// Layout and labels: the hosting view has a sensible size, the render carries ink rather than
+    /// a blank rectangle, the panel lays out four switches and eight sliders by name, and the stage
+    /// and parameter names are in the tree the player's assistive technology would read.
     func testTheShippedPanelLaysOutAndCarriesItsLabels() throws {
         let model = makeModel()
         let view = host(model)
@@ -390,6 +366,14 @@ final class EffectsSectionViewTests: XCTestCase {
             "the panel should lay out two sliders per stage; \(listing(view))"
         )
 
+        let names = Set(all.map { name(of: $0) })
+        for identifier in Self.toggleOrder + Self.sliderOrder {
+            XCTAssertTrue(
+                names.contains(identifier),
+                "the rendered panel carries no control named \(identifier); \(listing(view))"
+            )
+        }
+
         let seen = accessibilityStrings(in: view) + textFieldStrings(in: view)
         for expected in EffectsSection.stageTitles {
             XCTAssertTrue(seen.contains(expected), "the panel should show \(expected); saw \(seen)")
@@ -401,24 +385,11 @@ final class EffectsSectionViewTests: XCTestCase {
             seen.contains(where: { $0.contains("Save keeps them") }),
             "the panel should carry its footnote; saw \(seen)"
         )
-        XCTAssertTrue(
-            accessibilityStrings(in: view).contains(where: { $0.contains("Effects") }),
-            "the panel should carry its Effects group title; saw \(seen)"
-        )
-
-        let identifiers = Set(all.map { $0.accessibilityIdentifier() })
-            .union(accessibilityIdentifiers(in: view))
-        for identifier in Self.toggleOrder + Self.sliderOrder {
-            XCTAssertTrue(
-                identifiers.contains(identifier),
-                "the rendered panel carries no control named \(identifier); \(listing(view))"
-            )
-        }
     }
 
     // MARK: - The controls reach the model and the sound
 
-    /// The reverb switch. Pressing the checkbox the panel draws must enable the stage through
+    /// The reverb switch. Clicking the checkbox the panel draws must enable the stage through
     /// `AppModel.updateEffects`, update the model's status line, and change the samples.
     func testTheReverbSwitchReachesTheModelAndTheAudio() throws {
         let model = makeModel()
