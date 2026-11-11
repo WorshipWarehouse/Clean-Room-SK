@@ -5,18 +5,25 @@ import SundayKeysCore
 
 /// The arpeggiator's path through the app model, with time moved by hand.
 ///
-/// These cases drive the model the window drives - its MIDI transport note methods,
-/// which is the same note path a controller reaches - a tick at a time, the way the
-/// app's own ticker does. Before this wiring existed a note press went straight to
-/// the voices and nothing but that one note ever arrived, so the sequences below
-/// fail on the model as it was.
+/// These cases drive the model the window drives - its MIDI transport note
+/// methods, the same note path a controller reaches - one tick at a time, the
+/// way the app's own ticker does. Before this wiring existed a note press went
+/// straight to the voices and nothing but that one note ever arrived, so the
+/// sequences below fail on the model as it was.
 ///
-/// Nothing here starts an engine, opens a device or contacts a server: the controller
-/// is built over a recorder and the clock is a `ManualHostClock`.
+/// The grid is the one `StepClock` documents: a step every
+/// `60 / beatsPerMinute / stepsPerBeat` seconds, a note off at
+/// `gateFraction * stepInterval` after its note on, note offs before note ons
+/// at equal instants. At 120 bpm in eighths that is a step every 0.25 s and a
+/// gate of 0.125 s. Every horizon below is a whole number of steps past its
+/// anchor, so no case depends on a tick landing exactly on a boundary.
+///
+/// Nothing here starts an engine, opens a device or contacts a server: the
+/// controller is built over a recorder and the clock is a `ManualHostClock`.
 @MainActor
 final class StepClockWiringTests: XCTestCase {
-    /// Ticker step. The app ticks every 5 ms, so a test that does the same asks the
-    /// clock the question the running app asks it.
+    /// Ticker step. The app ticks every 5 ms, so a test that does the same asks
+    /// the clock the question the running app asks it.
     private let tickStep = 0.005
 
     /// Records what reached the voices, in order.
@@ -67,7 +74,9 @@ final class StepClockWiringTests: XCTestCase {
         }
     }
 
-    /// Ticks from the clock's current instant up to `end` in ticker-sized steps.
+    /// Ticks from the clock's current instant up to `end` in ticker-sized
+    /// steps. `end` is always picked a little past the step under test, so a
+    /// tick that accumulates a hair under the boundary cannot change a count.
     private func drive(_ model: AppModel, clock: ManualHostClock, to end: TimeInterval) {
         var time = clock.now
         while time < end - 1e-9 {
@@ -79,10 +88,10 @@ final class StepClockWiringTests: XCTestCase {
 
     // MARK: - The sequence
 
-    /// Three held notes at 120 bpm in eighths: a step every 0.125 s, gate of half a
-    /// step, so eight steps fall in the first second and each sounds then releases.
-    /// `up` walks 60, 64, 67 and wraps. A wrong interval changes the count; a wrong
-    /// order changes the values.
+    /// Three held notes at 120 bpm in eighths: a step every 0.25 s, a gate of
+    /// half a step, so the first second holds five steps at 0, 0.25, 0.5, 0.75
+    /// and 1.0 s. `up` walks 60, 64, 67 and wraps. A wrong interval changes the
+    /// count; a wrong order changes the values.
     func testAChordSteppedThroughTheModelProducesTheExactSequence() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -90,7 +99,7 @@ final class StepClockWiringTests: XCTestCase {
         model.setArpeggiatorEnabled(true)
 
         hold(model, [60, 64, 67])
-        drive(model, clock: clock, to: 1.0)
+        drive(model, clock: clock, to: 1.01)
 
         XCTAssertEqual(
             voices.lines,
@@ -99,10 +108,7 @@ final class StepClockWiringTests: XCTestCase {
                 "on 64 v100", "off 64",
                 "on 67 v100", "off 67",
                 "on 60 v100", "off 60",
-                "on 64 v100", "off 64",
-                "on 67 v100", "off 67",
-                "on 60 v100", "off 60",
-                "on 64 v100", "off 64",
+                "on 64 v100",
             ]
         )
         XCTAssertTrue(
@@ -153,8 +159,9 @@ final class StepClockWiringTests: XCTestCase {
         )
     }
 
-    /// A second key pressed mid-phrase joins the pattern, and the grid does not move
-    /// because of it: the next step is still the one the grid had scheduled.
+    /// A second key pressed mid-phrase joins the pattern, and the grid does not
+    /// move because of it: the next step is still the one the grid had
+    /// scheduled, at 0.25 s, not a quarter step after the press.
     func testANoteHeldMidPatternJoinsOnTheNextStep() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -177,8 +184,9 @@ final class StepClockWiringTests: XCTestCase {
 
     // MARK: - Changes mid-run
 
-    /// Changing the pattern restarts its cycle, so the step after the change is the
-    /// first note of the new ordering.
+    /// Changing the pattern restarts its cycle, so the step after the change is
+    /// the first note of the new ordering, and the note the old cycle was
+    /// sounding still releases on its own scheduled off.
     func testAPatternChangeTakesEffectOnTheNextStep() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -187,21 +195,26 @@ final class StepClockWiringTests: XCTestCase {
 
         hold(model, [60, 64, 67])
         model.tickArpeggiator()
-        drive(model, clock: clock, to: 0.125)
-        XCTAssertEqual(voices.lines, ["on 60 v100", "off 60"])
+        drive(model, clock: clock, to: 0.25)
+        XCTAssertEqual(voices.lines, ["on 60 v100", "off 60", "on 64 v100"])
 
         model.setArpeggiatorPattern(.down)
-        drive(model, clock: clock, to: 0.25)
+        drive(model, clock: clock, to: 0.5)
 
         XCTAssertEqual(
             voices.lines,
-            ["on 60 v100", "off 60", "on 67 v100"],
+            [
+                "on 60 v100", "off 60",
+                "on 64 v100", "off 64",
+                "on 67 v100",
+            ],
             "down starts from the highest held note"
         )
     }
 
-    /// A tempo change lands after the step already scheduled, so the next step keeps
-    /// its instant and the interval after it halves at 240 bpm.
+    /// A tempo change lands after the step already scheduled, so the step after
+    /// it keeps 0.25 s and the interval after that halves at 240 bpm, putting the
+    /// third step at 0.375 s rather than 0.4375 s.
     func testATempoChangeAppliesAfterThePendingStep() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -214,7 +227,7 @@ final class StepClockWiringTests: XCTestCase {
         clock.now = 0.02
         model.setArpeggiatorBeatsPerMinute(240)
 
-        drive(model, clock: clock, to: 0.25)
+        drive(model, clock: clock, to: 0.375)
         XCTAssertEqual(
             voices.lines,
             [
@@ -222,12 +235,13 @@ final class StepClockWiringTests: XCTestCase {
                 "on 64 v100", "off 64",
                 "on 67 v100",
             ],
-            "the pending step keeps 0.125 s and the next lands 0.0625 s later"
+            "the pending step keeps 0.25 s and the next lands 0.125 s later"
         )
     }
 
-    /// A division change to quarters takes effect after the step already scheduled:
-    /// that step still lands, and the one after it is half a second later.
+    /// A division change to quarters takes effect after the step already
+    /// scheduled: that step at 0.25 s still lands on the eighth grid, and the one
+    /// after it is half a second later, at 0.75 s.
     func testADivisionChangeAppliesAfterThePendingStep() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -242,16 +256,16 @@ final class StepClockWiringTests: XCTestCase {
         XCTAssertEqual(
             voices.lines,
             ["on 60 v100", "off 60", "on 60 v100", "off 60"],
-            "the pending step at 0.125 s still lands; the quarter step does not"
+            "the pending step at 0.25 s still lands; the next does not"
         )
 
-        drive(model, clock: clock, to: 0.75)
+        drive(model, clock: clock, to: 1.01)
         XCTAssertEqual(
             voices.lines,
             [
                 "on 60 v100", "off 60",
                 "on 60 v100", "off 60",
-                "on 60 v100",
+                "on 60 v100", "off 60",
             ],
             "a quarter at 120 bpm is one step every 0.5 s"
         )
@@ -259,7 +273,8 @@ final class StepClockWiringTests: XCTestCase {
 
     // MARK: - Empty and off
 
-    /// Nothing held means no pattern: a whole second of ticks produces no event at all.
+    /// Nothing held means no pattern: a whole second of ticks produces no event
+    /// at all.
     func testAnEmptyHeldSetProducesNoEvents() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -272,8 +287,9 @@ final class StepClockWiringTests: XCTestCase {
         XCTAssertFalse(model.arpeggiatorStatus.hasPrefix("Arp stepping"))
     }
 
-    /// With the arpeggiator off, a controller note passes straight through and carries
-    /// the pressed velocity, which is the behaviour the app had before this wiring.
+    /// With the arpeggiator off, a controller note passes straight through and
+    /// carries the pressed velocity, which is the behaviour the app had before
+    /// this wiring.
     func testAnOffArpeggiatorStillForwardsThePressedNote() {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -287,8 +303,9 @@ final class StepClockWiringTests: XCTestCase {
 
     // MARK: - The licence gate stays ahead of the pattern
 
-    /// A refused launch refuses the key before the pattern holds it, so no step reaches
-    /// the voices and the gate reads exactly as it did before the wiring.
+    /// A refused launch refuses the key before the pattern holds it, so no step
+    /// reaches the voices and the gate reads exactly as it did before the
+    /// wiring.
     func testARefusedLaunchRefusesTheKeyBeforeThePatternSeesIt() async {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -313,13 +330,14 @@ final class StepClockWiringTests: XCTestCase {
             "Session refused: Licence expired: sounds downgraded"
         )
         XCTAssertTrue(
-            model.lastEvent.hasPrefix("refused note 60"),
+            model.lastEvent.hasPrefix("refused note C4 ch 1: licensed playback refused:"),
             "got \(model.lastEvent)"
         )
     }
 
-    /// The control: the same pattern with a licensed launch does sound, so the case
-    /// above is proving the gate rather than proving the wiring is silent.
+    /// The control: the same pattern with a licensed launch does sound, and its
+    /// second step lands at 0.25 s, so the case above is proving the gate rather
+    /// than proving the wiring is silent.
     func testALicensedLaunchStepsThroughTheSamePath() async {
         let clock = ManualHostClock(now: 0)
         let voices = RecordingVoicing()
@@ -335,7 +353,7 @@ final class StepClockWiringTests: XCTestCase {
         model.setArpeggiatorEnabled(true)
 
         hold(model, [60])
-        drive(model, clock: clock, to: 0.2)
+        drive(model, clock: clock, to: 0.25)
 
         XCTAssertEqual(voices.lines, ["on 60 v100", "off 60", "on 60 v100"])
         XCTAssertTrue(model.launchAllowsPremiumSounds)
