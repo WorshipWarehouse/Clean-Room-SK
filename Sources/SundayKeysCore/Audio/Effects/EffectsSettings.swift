@@ -120,6 +120,16 @@ public struct DelaySettings: Codable, Equatable, Sendable {
         self.feedback = feedback
     }
 
+    /// The same shorthand as a call, so a caller that asked for one time still
+    /// compiles and still means both taps.
+    public init(enabled: Bool = false, mix: Float = 0.25, time: Float, feedback: Float = 0.3) {
+        self.enabled = enabled
+        self.mix = mix
+        self.leftTime = time
+        self.rightTime = time
+        self.feedback = feedback
+    }
+
     /// Both taps at once.
     public var time: Float {
         get { leftTime }
