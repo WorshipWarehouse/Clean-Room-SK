@@ -20,6 +20,9 @@ public final class RealtimeKeysoundEngine {
     public private(set) var patch: Patch
     public let instrument: PolyphonicInstrument
     public let effects: EffectChain
+    /// The right-hand chain. Two instances rather than one stereo chain keeps every
+    /// processor single-channel and gives each side its own state.
+    public let effectsRight: EffectChain
     /// The click track. It belongs to the app rather than to a patch, and the engine
     /// adds it after the effects, so a cue is never reverberated, delayed or equalised.
     public let metronome: Metronome
@@ -27,6 +30,9 @@ public final class RealtimeKeysoundEngine {
     private var router: LayerRouter
     private let queue: SPSCCommandQueue
     private let curve: VelocityCurve
+    /// Scratch the click is rendered into on the stereo path, so one cue reaches both
+    /// channels without the metronome advancing twice per block.
+    private let clickScratch: UnsafeMutablePointer<Float>
 
     public init(
         sampleRate: Double,
@@ -39,7 +45,8 @@ public final class RealtimeKeysoundEngine {
         let initial = Patch(name: "Initial", layers: layers)
         patch = initial
         router = LayerRouter(layers: layers)
-        effects = EffectChain(sampleRate: sampleRate)
+        effects = EffectChain(sampleRate: sampleRate, channel: .left)
+        effectsRight = EffectChain(sampleRate: sampleRate, channel: .right)
         metronome = Metronome(sampleRate: sampleRate)
         instrument = PolyphonicInstrument(
             sampleRate: sampleRate,
@@ -48,8 +55,16 @@ public final class RealtimeKeysoundEngine {
             voicesPerLayer: voicesPerLayer
         )
         queue = SPSCCommandQueue(capacity: queueCapacity)
+        clickScratch = UnsafeMutablePointer<Float>.allocate(capacity: 8_192)
+        clickScratch.initialize(repeating: 0, count: 8_192)
         self.curve = curve
         effects.apply(settings: initial.effects)
+        effectsRight.apply(settings: initial.effects)
+    }
+
+    deinit {
+        clickScratch.deinitialize(count: 8_192)
+        clickScratch.deallocate()
     }
 
     public var voiceCount: Int {
@@ -78,6 +93,7 @@ public final class RealtimeKeysoundEngine {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
         effects.apply(settings: newPatch.effects)
+        effectsRight.apply(settings: newPatch.effects)
 
         var index = 0
         while index < newPatch.layers.count {
@@ -100,6 +116,7 @@ public final class RealtimeKeysoundEngine {
     public func setEffects(_ settings: EffectsSettings) {
         patch.effects = settings
         effects.apply(settings: settings)
+        effectsRight.apply(settings: settings)
     }
 
     /// Producer side. Publishes the click's settings through the metronome's own
@@ -168,6 +185,52 @@ public final class RealtimeKeysoundEngine {
             spins += 1
         }
         return false
+    }
+
+    /// Render thread only. The stereo twin of `render`.
+    ///
+    /// The voices are mono, so the instrument writes the left channel and that mix is
+    /// copied to the right before the chains run: stereo is made by the effects, and
+    /// giving both sides the same input is what lets the delay taps differ without
+    /// rendering the voices twice. The click is added afterwards from its own scratch,
+    /// so one cue reaches both channels and the metronome advances once per block.
+    public func renderStereo(
+        intoLeft left: UnsafeMutableBufferPointer<Float>,
+        intoRight right: UnsafeMutableBufferPointer<Float>,
+        frameCount: Int
+    ) {
+        var command = queue.pop()
+        while let current = command {
+            instrument.apply(current)
+            command = queue.pop()
+        }
+
+        let frames = min(frameCount, min(left.count, right.count))
+        guard frames > 0, let leftBase = left.baseAddress, let rightBase = right.baseAddress else {
+            return
+        }
+
+        instrument.render(into: left, frameCount: frames)
+
+        var index = 0
+        while index < frames {
+            rightBase[index] = leftBase[index]
+            index += 1
+        }
+
+        effects.process(into: left, frameCount: frames)
+        effectsRight.process(into: right, frameCount: frames)
+
+        let clickFrames = min(frames, 8_192)
+        let click = UnsafeMutableBufferPointer(start: clickScratch, count: clickFrames)
+        metronome.render(into: click, frameCount: clickFrames)
+
+        index = 0
+        while index < clickFrames {
+            leftBase[index] += clickScratch[index]
+            rightBase[index] += clickScratch[index]
+            index += 1
+        }
     }
 
     /// Render thread only. Drains the queue, renders the voices, processes the patch's

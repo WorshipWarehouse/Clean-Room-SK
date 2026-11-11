@@ -29,6 +29,9 @@ final class AudioEngineController {
     private var metronomeSettings = MetronomeSettings()
     private var keysound: RealtimeKeysoundEngine?
     private var sourceNode: AVAudioSourceNode?
+    /// The right-hand buffer the render block fills, so the patch's effects run in
+    /// stereo. Allocated on the main thread when the graph starts and freed on stop.
+    private var rightStorage: UnsafeMutablePointer<Float>?
     private(set) var isRunning = false
     private(set) var sampleRate: Double = 0
 
@@ -116,6 +119,10 @@ final class AudioEngineController {
         // The click's settings survive a stop and start, so a click left on before
         // Start is already audible in the first block.
         keysound.setMetronome(metronomeSettings)
+        let chunkSize = 4_096
+        let rightStorage = UnsafeMutablePointer<Float>.allocate(capacity: chunkSize)
+        rightStorage.initialize(repeating: 0, count: chunkSize)
+        self.rightStorage = rightStorage
 
         let node = AVAudioSourceNode(format: format) { _, _, frameCount, audioBufferList -> OSStatus in
             let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
@@ -132,13 +139,22 @@ final class AudioEngineController {
                 frame += 1
             }
 
-            keysound.render(into: head, frameCount: frames)
-            var channel = 1
-            while channel < buffers.count {
-                if let data = buffers[channel].mData?.assumingMemoryBound(to: Float.self) {
-                    memcpy(data, firstData, frames * MemoryLayout<Float>.size)
+            var offset = 0
+            while offset < frames {
+                let chunk = min(chunkSize, frames - offset)
+                let left = UnsafeMutableBufferPointer(start: firstData + offset, count: chunk)
+                let right = UnsafeMutableBufferPointer(start: rightStorage, count: chunk)
+                keysound.renderStereo(intoLeft: left, intoRight: right, frameCount: chunk)
+
+                var channel = 1
+                while channel < buffers.count {
+                    if let data = buffers[channel].mData?.assumingMemoryBound(to: Float.self) {
+                        let source = channel % 2 == 1 ? rightStorage : firstData + offset
+                        memcpy(data + offset, source, chunk * MemoryLayout<Float>.size)
+                    }
+                    channel += 1
                 }
-                channel += 1
+                offset += chunk
             }
 
             return noErr
@@ -151,6 +167,9 @@ final class AudioEngineController {
             try engine.start()
         } catch {
             engine.detach(node)
+            self.rightStorage?.deinitialize(count: 4_096)
+            self.rightStorage?.deallocate()
+            self.rightStorage = nil
             throw AudioStartFailure.engineFailed(error.localizedDescription)
         }
 
@@ -169,6 +188,11 @@ final class AudioEngineController {
             sourceNode = nil
         }
         keysound = nil
+        if let storage = rightStorage {
+            storage.deinitialize(count: 4_096)
+            storage.deallocate()
+            self.rightStorage = nil
+        }
         isRunning = false
     }
 

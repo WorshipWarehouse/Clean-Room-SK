@@ -19,6 +19,16 @@ import Foundation
 /// and leaves the buffer bit-for-bit dry. Settings live in the patch, so switching
 /// patches switches the whole sound and one patch cannot leave its reverb ringing
 /// inside the next one.
+/// Which side of the stereo pair a chain instance feeds.
+///
+/// The voices are mono, so stereo is made by the effects: one chain per side, each
+/// with its own filter and buffer state, and the delay reading the tap that belongs
+/// to its side.
+public enum EffectChannel: Equatable, Sendable {
+    case left
+    case right
+}
+
 public final class EffectChain {
     public let sampleRate: Double
 
@@ -27,13 +37,17 @@ public final class EffectChain {
     private let delay: DelayProcessor
     private let reverb: ReverbProcessor
 
+    /// The side this chain feeds, fixed at construction.
+    public let channel: EffectChannel
+
     private let published: UnsafeMutablePointer<EffectsSettings>
     private let sequence: UnsafeMutablePointer<UInt64>
     private var active = EffectsSettings()
 
-    public init(sampleRate: Double) {
+    public init(sampleRate: Double, channel: EffectChannel = .left) {
         let rate = sampleRate > 0 ? sampleRate : 48_000
         self.sampleRate = rate
+        self.channel = channel
         eq = EQProcessor(sampleRate: rate)
         chorus = ChorusProcessor(sampleRate: rate)
         delay = DelayProcessor(sampleRate: rate)
@@ -76,7 +90,9 @@ public final class EffectChain {
 
         eq.process(into: buffer, frameCount: frames, settings: active.eq)
         chorus.process(into: buffer, frameCount: frames, settings: active.chorus)
-        delay.process(into: buffer, frameCount: frames, settings: active.delay)
+        var delaySettings = active.delay
+        delaySettings.time = channel == .left ? active.delay.leftTime : active.delay.rightTime
+        delay.process(into: buffer, frameCount: frames, settings: delaySettings)
         reverb.process(into: buffer, frameCount: frames, settings: active.reverb)
     }
 
