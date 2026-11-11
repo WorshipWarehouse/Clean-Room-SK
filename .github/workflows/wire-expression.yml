@@ -1,0 +1,30 @@
+name: wire-expression
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Give bend and pressure a destination
+        shell: bash
+        run: |
+          set -o pipefail
+          cp tools/wire_expression.py /tmp/wire_expression.py
+          git fetch origin main
+          git checkout -B main origin/main
+          git config user.name "WorshipWarehouse"
+          git config user.email "worshipwarehousesite@gmail.com"
+          python3 /tmp/wire_expression.py
+          git rm -q .github/workflows/wire-expression.yml tools/wire_expression.py
+          git add -A
+          git commit -m "Give pitch bend and channel pressure a real engine destination"
+          git push origin main
+          git log -1 --format=%H
