@@ -10,17 +10,24 @@ import SundayKeysCore
 /// prove that the window's own controls are wired to that method: the panel used to be a private
 /// property of `ContentView`, so nothing could instantiate it. It is now `EffectsSection`, the
 /// view `ContentView` shows, and these cases host that exact view in an `NSHostingView` with no
-/// window and no display, assert it laid out with its labels, then press the AppKit controls
-/// SwiftUI creates behind each checkbox and slider and measure what the panel did to the audio.
+/// window and no display, assert it laid out with its labels, press the AppKit controls SwiftUI
+/// creates behind each switch and slider, and measure what the panel did to the audio.
 ///
-/// Two things about driving a SwiftUI control offscreen are worth stating, because both were
-/// learned from a failing run rather than assumed:
+/// Three things about driving a SwiftUI control offscreen are stated here because they were
+/// learned from failing runs, not assumed:
 ///
 /// * A SwiftUI `Slider(in: a...b)` is backed by an `NSSlider` whose own range is 0...1, so a value
 ///   has to be moved in as a fraction of the panel's range; assigning the logical value directly
 ///   clamps to the slider's end (0.08 s landed on 0.1144 s, which is 0.08 of 0.02...1.2).
-/// * The control's action does not finish updating the model until the view has been laid out
-///   again, so each drive is followed by a settle pass before anything is asserted.
+/// * The hosted controls are SwiftUI's own classes - `CustomMarkedSlider` and
+///   `FocusRingNSButton` - and they do not carry the `accessibilityIdentifier` applied in the
+///   view; the identifiers live in the accessibility tree instead. Lookup therefore matches the
+///   identifier when a platform does forward it and otherwise takes the control's position, which
+///   the first case pins by counting the switches and sliders the panel lays out.
+/// * A switch is not driven by `performClick`: with no window to host the click, that does not
+///   reach the binding. It is driven the way AppKit delivers a click - the state a click would
+///   set, then the button's own action - with `performClick` kept as a second attempt, and the
+///   case reports which attempt wrote through when it can.
 ///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
@@ -31,8 +38,8 @@ final class EffectsSectionViewTests: XCTestCase {
     private let block = 512
     private let panelSize = NSSize(width: 900, height: 210)
 
-    /// The order the panel draws these in, used only as a fallback when a platform drops the
-    /// accessibility identifier: a wrong pick then fails the assertions instead of passing them.
+    /// The order the panel draws these in, used only when a platform does not forward an
+    /// identifier: a wrong pick then fails the assertions instead of passing them.
     private static let toggleOrder = [
         "effects.eq.enabled", "effects.chorus.enabled", "effects.delay.enabled", "effects.reverb.enabled",
     ]
@@ -72,10 +79,7 @@ final class EffectsSectionViewTests: XCTestCase {
         return view
     }
 
-    /// Lets the view finish the update a control's action started. Without this the model can be
-    /// read before SwiftUI has written the binding, which is exactly how the EQ and chorus
-    /// switches first appeared not to work while the reverb case - which moved sliders before
-    /// asserting - appeared to.
+    /// Lets the view finish the update a control's action started.
     private func settle(_ view: NSView) {
         view.layoutSubtreeIfNeeded()
         RunLoop.current.run(until: Date().addingTimeInterval(0.02))
@@ -97,9 +101,15 @@ final class EffectsSectionViewTests: XCTestCase {
 
     private func listing(_ view: NSView) -> String {
         let described = controls(in: view).map { control in
-            "\(type(of: control))[\(control.accessibilityIdentifier())]"
+            "\(type(of: control))[id=\(control.accessibilityIdentifier()) enabled=\(control.isEnabled)]"
         }
         return "\(described.count) AppKit controls: \(described)"
+    }
+
+    private func describe(_ button: NSButton) -> String {
+        "\(type(of: button))[id=\(button.accessibilityIdentifier()) enabled=\(button.isEnabled) "
+            + "state=\(button.state.rawValue) target=\(String(describing: button.target)) "
+            + "action=\(String(describing: button.action))]"
     }
 
     private func control<T: NSControl>(
@@ -129,11 +139,30 @@ final class EffectsSectionViewTests: XCTestCase {
         try control(identifier, as: NSButton.self, order: Self.toggleOrder, in: view)
     }
 
-    /// Presses the switch the panel draws, then lets the view settle.
-    private func press(_ identifier: String, in view: NSView) throws {
+    /// Presses the switch the panel draws until the model reflects it, and fails with what each
+    /// attempt saw if none of them writes through.
+    private func press(_ identifier: String, in view: NSView, changed: () -> Bool) throws {
         let button = try toggle(identifier, in: view)
+        var attempts: [String] = []
+
+        // A click, delivered the way AppKit delivers one: the state it would set, then the
+        // button's own action. This is the path that reaches a binding with no window.
+        button.state = .on
+        button.sendAction(button.action, to: button.target)
+        settle(view)
+        attempts.append("state+sendAction on \(describe(button))")
+        if changed() { return }
+
+        // The click itself, for platforms that route it through the control.
         button.performClick(nil)
         settle(view)
+        attempts.append("performClick on \(describe(button))")
+        if changed() { return }
+
+        XCTFail(
+            "nothing wrote \(identifier) through AppModel.updateEffects; "
+                + "attempts: \(attempts.joined(separator: "; ")); \(listing(view))"
+        )
     }
 
     /// Moves a slider the way a pointer would: the value is converted into the backing control's
@@ -202,6 +231,21 @@ final class EffectsSectionViewTests: XCTestCase {
         if let children = object.accessibilityChildren() {
             for child in children {
                 found += accessibilityStrings(in: child)
+            }
+        }
+        return found
+    }
+
+    /// The identifiers in the same tree, which is where a hosted SwiftUI control carries them.
+    private func accessibilityIdentifiers(in element: Any) -> [String] {
+        guard let object = element as? NSAccessibilityProtocol else { return [] }
+        var found: [String] = []
+        if let identifier = object.accessibilityIdentifier(), !identifier.isEmpty {
+            found.append(identifier)
+        }
+        if let children = object.accessibilityChildren() {
+            for child in children {
+                found += accessibilityIdentifiers(in: child)
             }
         }
         return found
@@ -288,9 +332,9 @@ final class EffectsSectionViewTests: XCTestCase {
     // MARK: - The panel is really there
 
     /// Layout and labels: the hosting view has a sensible size, the render carries ink rather
-    /// than a blank rectangle, the stage names and parameter names are in the tree the player's
-    /// assistive technology would read, and the controls carry the identifiers the cases below
-    /// drive them by.
+    /// than a blank rectangle, the panel lays out four switches and eight sliders, the stage and
+    /// parameter names are in the tree the player's assistive technology would read, and every
+    /// control carries its identifier - on the control or in that tree.
     func testTheShippedPanelLaysOutAndCarriesItsLabels() throws {
         let model = makeModel()
         let view = host(model)
@@ -302,6 +346,16 @@ final class EffectsSectionViewTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(image.size.width, 800, "the render is narrower than the panel")
         XCTAssertGreaterThanOrEqual(image.size.height, 120, "the render is shorter than the panel")
         XCTAssertGreaterThan(inkFraction(image), 0.005, "the panel rendered blank")
+
+        let all = controls(in: view)
+        XCTAssertEqual(
+            all.compactMap { $0 as? NSButton }.count, EffectsSection.stageTitles.count,
+            "the panel should lay out one switch per stage; \(listing(view))"
+        )
+        XCTAssertEqual(
+            all.compactMap { $0 as? NSSlider }.count, Self.sliderOrder.count,
+            "the panel should lay out two sliders per stage; \(listing(view))"
+        )
 
         let seen = accessibilityStrings(in: view) + textFieldStrings(in: view)
         for expected in EffectsSection.stageTitles {
@@ -319,7 +373,8 @@ final class EffectsSectionViewTests: XCTestCase {
             "the panel should carry its Effects group title; saw \(seen)"
         )
 
-        let identifiers = Set(controls(in: view).map { $0.accessibilityIdentifier() })
+        let identifiers = Set(all.map { $0.accessibilityIdentifier() })
+            .union(accessibilityIdentifiers(in: view))
         for identifier in Self.toggleOrder + Self.sliderOrder {
             XCTAssertTrue(
                 identifiers.contains(identifier),
@@ -337,12 +392,9 @@ final class EffectsSectionViewTests: XCTestCase {
         let view = host(model)
         let dry = render(model.patch)
 
-        try press("effects.reverb.enabled", in: view)
+        try press("effects.reverb.enabled", in: view) { model.patch.effects.reverb.enabled }
 
-        XCTAssertTrue(
-            model.patch.effects.reverb.enabled,
-            "the switch did not write through AppModel.updateEffects; \(listing(view))"
-        )
+        XCTAssertTrue(model.patch.effects.reverb.enabled)
         XCTAssertEqual(model.bankStatus, "Edited effects on \(model.patch.name), not saved yet")
 
         try move("effects.reverb.mix", to: 0.6, in: view)
@@ -363,11 +415,8 @@ final class EffectsSectionViewTests: XCTestCase {
         let model = makeModel()
         let view = host(model)
 
-        try press("effects.eq.enabled", in: view)
-        XCTAssertTrue(
-            model.patch.effects.eq.enabled,
-            "the EQ switch did not write through AppModel.updateEffects; \(listing(view))"
-        )
+        try press("effects.eq.enabled", in: view) { model.patch.effects.eq.enabled }
+        XCTAssertTrue(model.patch.effects.eq.enabled)
 
         try move("effects.eq.lowGain", to: 12, in: view)
         XCTAssertEqual(
@@ -377,7 +426,10 @@ final class EffectsSectionViewTests: XCTestCase {
         let boosted = rms(render(model.patch).left[...])
 
         try move("effects.eq.lowGain", to: -12, in: view)
-        XCTAssertEqual(model.patch.effects.eq.lowGain, -12, accuracy: 0.001)
+        XCTAssertEqual(
+            model.patch.effects.eq.lowGain, -12, accuracy: 0.001,
+            "the low shelf did not move back"
+        )
         let cut = rms(render(model.patch).left[...])
 
         XCTAssertGreaterThan(
@@ -393,11 +445,8 @@ final class EffectsSectionViewTests: XCTestCase {
         let view = host(model)
         let dry = render(model.patch)
 
-        try press("effects.chorus.enabled", in: view)
-        XCTAssertTrue(
-            model.patch.effects.chorus.enabled,
-            "the chorus switch did not write through AppModel.updateEffects; \(listing(view))"
-        )
+        try press("effects.chorus.enabled", in: view) { model.patch.effects.chorus.enabled }
+        XCTAssertTrue(model.patch.effects.chorus.enabled)
 
         try move("effects.chorus.mix", to: 0.5, in: view)
         try move("effects.chorus.rate", to: 3.5, in: view)
@@ -421,11 +470,8 @@ final class EffectsSectionViewTests: XCTestCase {
         // Captured before any edit, so the comparison really is against no delay at all.
         let dry = render(model.patch).left
 
-        try press("effects.delay.enabled", in: view)
-        XCTAssertTrue(
-            model.patch.effects.delay.enabled,
-            "the delay switch did not write through AppModel.updateEffects; \(listing(view))"
-        )
+        try press("effects.delay.enabled", in: view) { model.patch.effects.delay.enabled }
+        XCTAssertTrue(model.patch.effects.delay.enabled)
         try move("effects.delay.mix", to: 0.6, in: view)
 
         try move("effects.delay.time", to: 0.08, in: view)
