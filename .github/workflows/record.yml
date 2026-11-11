@@ -1,0 +1,27 @@
+name: record
+# Dispatch-only. Appends the milestone record to docs/progress.md, which is too
+# large to rewrite through the contents API. Temporary: removed once it has
+# appended.
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Append the record
+        run: |
+          set -euo pipefail
+          printf '\n' >> docs/progress.md
+          cat docs/re/step-clock-app-milestone.md >> docs/progress.md
+          tail -n 5 docs/progress.md
+      - name: Commit
+        run: |
+          set -euo pipefail
+          git config user.name WorshipWarehouse
+          git config user.email worshipwarehousesite@gmail.com
+          git add docs/progress.md
+          git commit -m "Record the step clock wiring in the progress log"
+          git push
