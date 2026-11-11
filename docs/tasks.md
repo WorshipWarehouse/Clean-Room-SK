@@ -30,8 +30,8 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
 - [x] **Render budget** — `RenderBudgetTests` drives the real `renderStereo` path with ten voices and
       every stage engaged, and measures each block on a monotonic clock against the budget the block
       itself implies: 512 frames at 48 kHz is 10,667 µs. On the `macos-15` runner the engaged chain
-      measured a **999.4 µs median (9.4% of the block)** with a 2,960.5 µs worst block (27.8%), and
-      the same voices with the chain bypassed measured 592.0 µs median (5.5%) with a 1,671.8 µs worst
+      measured a **999.4 µs median (9.4% of the block)** with a 2,960.5 µs worst block (27.8%), and the
+      same voices with the chain bypassed measured 592.0 µs median (5.5%) with a 1,671.8 µs worst
       (15.7%) — the chain costs 1.7x the dry path. CI fails if the engaged median takes more than a
       quarter of the block or if any single block overruns it, and `.github/workflows/budget.yml`
       prints the numbers as annotations on a pass as well as a failure.
@@ -56,11 +56,26 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       `workflow_run` of `build` completing on `main` and checks out
       `github.event.workflow_run.head_sha`, so the strict job no longer competes with the build for a
       macOS runner. Evidence: `docs/re/ci-runner-queue.md`.
+- [x] **Effects panel coverage** — the panel's controls are now exercised through the one method they
+      call, `AppModel.updateEffects`, and measured on the samples that path produces.
+      `Tests/SundayKeysAppTests/EffectsPanelTests.swift` edits the patch through the model and renders
+      `model.patch` on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per block, then asserts
+      measured facts: the reverb switch changes the rendered samples and leaves the model's status line
+      reading `Edited effects on <patch>, not saved yet`; a +12 dB low shelf carries more than 1.5x the
+      RMS of the same shelf at -12 dB; the chorus edit changes the wet copy from the bypassed render; the
+      two delay taps at 0.08 s and 0.24 s render the sides apart by more than 1e-3 and equal taps bring
+      them back under half of that; the wet tail at blocks 70-80 outlives the dry release by more than
+      1.5x; and an effect changed while a note sounds, republished with `releasingVoices: false`, leaves
+      `voiceCount` unchanged, so a live edit does not cut the held chord. Evidence:
+      `docs/re/effects-panel-coverage.md`. Not claimed: the panel has been seen, because this
+      environment has no window.
 
 ## Next
-- [ ] **Effects panel coverage** — the panel controls exist and write through `AppModel.updateEffects`,
-      but nobody has seen the window; a pass should drive the same effect edits the panel makes through
-      a probe and record what they do to the rendered samples.
+
+Nothing reachable is open. Every item still in this list is in Blocked below, because it needs hardware
+(an output device, a second interface, a physical controller), a purchase or entitlement, a credential,
+or a window this environment does not have. The next pass should start from the capability rows in
+`docs/feature-inventory.md` and take one that code alone can close.
 
 ## Blocked, and why
 
@@ -81,8 +96,9 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
   `InstrumentDownloader`, `/api/v1/instruments/search` and `aupresetUrl` are Observed names with an
   Unknown wire and an Unknown container format, the content is licensed and was not copied, and there
   is no entitlement to download it; the catalogue above is synthesised for that reason.
-- **The window has never been seen**, so layout, focus and panel behaviour are unverified by eye, and
-  the instrument picker is compiled and tested but not viewed.
+- **The window has never been seen**, so layout, focus and panel behaviour are unverified by eye. The
+  effects panel is covered through the model method its controls call, not by clicking it, and the
+  instrument picker is compiled and tested but not viewed.
 - **The original app's licence wire, effect parameter ranges, split semantics, MIDI CC numbers and
   session contents remain Unknown** (`docs/feature-inventory.md`, Known limits), so no parity is
   claimed for them.
