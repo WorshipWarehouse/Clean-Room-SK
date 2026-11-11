@@ -13,8 +13,8 @@ import SundayKeysCore
 /// window and no display, assert it laid out with its labels, operate the controls the panel
 /// draws, and measure what the panel did to the audio.
 ///
-/// Two facts about operating those controls offscreen were learned from failing runs and are worth
-/// stating, because both shaped the panel as well as this file:
+/// Three facts about operating those controls offscreen were learned from failing runs and are
+/// worth stating, because all three shaped the panel as well as this file:
 ///
 /// * A SwiftUI `Toggle` cannot be operated outside a window. The `FocusRingNSButton` behind it
 ///   carries neither a target nor an action, and a detached hosting view publishes no
@@ -24,6 +24,12 @@ import SundayKeysCore
 ///   so a query by name has nothing to match and a test is left guessing by position. The app
 ///   therefore ships `EffectsSlider`: an `NSSlider` whose own range is the effect's range, whose
 ///   action calls `AppModel.updateEffects`, and whose `NSView.identifier` is the control's name.
+/// * A detached hosting view publishes no accessibility tree at all - the first runs against the
+///   shipped panel reported "the tree carries []" - and SwiftUI draws its text itself rather than
+///   through `NSTextField`. The labels are therefore verified as what they are in a render: the
+///   label column each row reserves between its switch and its first slider, and the ink each row
+///   and the footnote actually draw. No glyph is read back as a string here, and none is claimed
+///   to be.
 ///
 /// Every measurement is rendered on the real `RealtimeKeysoundEngine` at 48 kHz, 512 frames per
 /// block, from the patch the model holds after the control was touched. Nothing here starts a
@@ -43,6 +49,14 @@ final class EffectsSectionViewTests: XCTestCase {
     private static let sliderOrder = [
         "effects.eq.lowGain", "effects.eq.highGain", "effects.chorus.mix", "effects.chorus.rate",
         "effects.delay.mix", "effects.delay.time", "effects.reverb.mix", "effects.reverb.decay",
+    ]
+
+    /// Each stage with its switch and the two sliders the row draws after its label.
+    private static let rows: [(switchName: String, sliders: [String])] = [
+        ("effects.eq.enabled", ["effects.eq.lowGain", "effects.eq.highGain"]),
+        ("effects.chorus.enabled", ["effects.chorus.mix", "effects.chorus.rate"]),
+        ("effects.delay.enabled", ["effects.delay.mix", "effects.delay.time"]),
+        ("effects.reverb.enabled", ["effects.reverb.mix", "effects.reverb.decay"]),
     ]
 
     /// The range each effect accepts, which the shipped slider must carry as its own range.
@@ -139,6 +153,12 @@ final class EffectsSectionViewTests: XCTestCase {
         try control(identifier, as: NSButton.self, order: Self.toggleOrder, in: view)
     }
 
+    /// A control's rectangle in the panel's own coordinates, so rows drawn in different stack
+    /// views can be compared with each other.
+    private func frameInPanel(_ control: NSControl, in view: NSView) -> NSRect {
+        control.convert(control.bounds, to: view)
+    }
+
     /// The accessibility element the panel publishes under an identifier, when a host does publish
     /// one.
     private func accessibilityElement(_ identifier: String, in element: Any) -> NSAccessibilityProtocol? {
@@ -215,60 +235,53 @@ final class EffectsSectionViewTests: XCTestCase {
         return renderer.nsImage
     }
 
-    /// The share of sampled pixels dark enough to be drawn content rather than the panel's
-    /// background. A silently empty render scores zero.
-    private func inkFraction(_ image: NSImage) -> Double {
+    /// The share of sampled pixels inside `rect` - given in the rendered image's own top-left
+    /// coordinates - that are dark enough to be drawn content rather than background. A silently
+    /// empty render scores zero everywhere.
+    private func inkFraction(_ image: NSImage, in rect: NSRect) -> Double {
         guard let tiff = image.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff) else {
             return 0
         }
+        guard bitmap.pixelsWide > 0, bitmap.pixelsHigh > 0, image.size.width > 0 else { return 0 }
+        let scaleX = CGFloat(bitmap.pixelsWide) / image.size.width
+        let scaleY = CGFloat(bitmap.pixelsHigh) / image.size.height
         var ink = 0
         var sampled = 0
-        let step = 3
-        var y = 0
-        while y < bitmap.pixelsHigh {
-            var x = 0
-            while x < bitmap.pixelsWide {
+        var y = max(0, Int(rect.minY * scaleY))
+        let lastY = min(bitmap.pixelsHigh, Int(rect.maxY * scaleY))
+        while y < lastY {
+            var x = max(0, Int(rect.minX * scaleX))
+            let lastX = min(bitmap.pixelsWide, Int(rect.maxX * scaleX))
+            while x < lastX {
                 if let colour = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.deviceRGB) {
                     if colour.alphaComponent > 0.05, colour.brightnessComponent < 0.65 {
                         ink += 1
                     }
                     sampled += 1
                 }
-                x += step
+                x += 2
             }
-            y += step
+            y += 2
         }
         return sampled == 0 ? 0 : Double(ink) / Double(sampled)
     }
 
-    /// Every string the hosting view's accessibility tree carries: labels for a control, values
-    /// for static text.
-    private func accessibilityStrings(in element: Any) -> [String] {
-        guard let object = element as? NSAccessibilityProtocol else { return [] }
-        var found: [String] = []
-        if let label = object.accessibilityLabel(), !label.isEmpty {
-            found.append(label)
-        }
-        if let value = object.accessibilityValue() as? String, !value.isEmpty {
-            found.append(value)
-        }
-        if let children = object.accessibilityChildren() {
-            for child in children {
-                found += accessibilityStrings(in: child)
-            }
-        }
-        return found
+    private func inkFraction(_ image: NSImage) -> Double {
+        inkFraction(
+            image,
+            in: NSRect(origin: .zero, size: image.size)
+        )
     }
 
-    private func textFieldStrings(in view: NSView) -> [String] {
-        var found: [String] = []
-        for subview in view.subviews {
-            if let field = subview as? NSTextField, !field.stringValue.isEmpty {
-                found.append(field.stringValue)
-            }
-            found += textFieldStrings(in: subview)
-        }
-        return found
+    /// Turns a rectangle in the panel's bottom-left coordinates into the rendered image's
+    /// top-left coordinates.
+    private func imageRect(_ viewRect: NSRect) -> NSRect {
+        NSRect(
+            x: viewRect.minX,
+            y: panelSize.height - viewRect.maxY,
+            width: viewRect.width,
+            height: viewRect.height
+        )
     }
 
     // MARK: - Audio
@@ -342,8 +355,8 @@ final class EffectsSectionViewTests: XCTestCase {
 
     /// Layout and labels: the hosting view has a sensible size, the render carries ink rather than
     /// a blank rectangle, the panel lays out four switches and eight sliders by name, each slider
-    /// carries its effect's range, and the stage and parameter names are in the tree the player's
-    /// assistive technology would read.
+    /// carries its effect's range, every row reserves its label column and draws content in it, and
+    /// the footnote under the rows draws too.
     func testTheShippedPanelLaysOutAndCarriesItsLabels() throws {
         let model = makeModel()
         let view = host(model)
@@ -386,16 +399,51 @@ final class EffectsSectionViewTests: XCTestCase {
             XCTAssertEqual(slider.maxValue, range.upperBound, accuracy: 1e-9, "\(identifier) max")
         }
 
-        let seen = accessibilityStrings(in: view) + textFieldStrings(in: view)
-        for expected in EffectsSection.stageTitles {
-            XCTAssertTrue(seen.contains(expected), "the panel should show \(expected); saw \(seen)")
+        // Each row: the switch, then the label column the row reserves for its stage and parameter
+        // names, then its two sliders left to right, and drawn content in the band the row occupies.
+        var lowestRow = panelSize.height
+        for row in Self.rows {
+            let button = try toggle(row.switchName, in: view)
+            let first = try control(row.sliders[0], as: NSSlider.self, order: Self.sliderOrder, in: view)
+            let second = try control(row.sliders[1], as: NSSlider.self, order: Self.sliderOrder, in: view)
+
+            let switchFrame = frameInPanel(button, in: view)
+            let firstFrame = frameInPanel(first, in: view)
+            let secondFrame = frameInPanel(second, in: view)
+            lowestRow = min(lowestRow, switchFrame.minY)
+
+            XCTAssertEqual(
+                switchFrame.midY, firstFrame.midY, accuracy: 12,
+                "\(row.switchName) and \(row.sliders[0]) should be laid out on one row"
+            )
+            XCTAssertGreaterThanOrEqual(
+                firstFrame.minX - switchFrame.maxX, 60,
+                "\(row.switchName) should leave its label column before the first slider: "
+                    + "switch \(switchFrame), first slider \(firstFrame)"
+            )
+            XCTAssertGreaterThanOrEqual(
+                secondFrame.minX - firstFrame.maxX, 80,
+                "\(row.sliders[1]) should sit to the right of \(row.sliders[0]) with its reading between: "
+                    + "\(firstFrame) then \(secondFrame)"
+            )
+
+            let band = NSRect(
+                x: 0,
+                y: switchFrame.minY - 3,
+                width: panelSize.width,
+                height: switchFrame.height + 6
+            )
+            XCTAssertGreaterThan(
+                inkFraction(image, in: imageRect(band)), 0.002,
+                "the \(row.switchName) row drew no content"
+            )
         }
-        for expected in ["low", "high", "mix", "rate", "time", "decay"] {
-            XCTAssertTrue(seen.contains(expected), "the panel should label \(expected); saw \(seen)")
-        }
-        XCTAssertTrue(
-            seen.contains(where: { $0.contains("Save keeps them") }),
-            "the panel should carry its footnote; saw \(seen)"
+
+        // The footnote sits under the last row, so the band below it must draw as well.
+        let footnoteBand = NSRect(x: 0, y: 0, width: panelSize.width, height: max(1, lowestRow - 3))
+        XCTAssertGreaterThan(
+            inkFraction(image, in: imageRect(footnoteBand)), 0.002,
+            "the panel drew no footnote under its rows"
         )
     }
 
