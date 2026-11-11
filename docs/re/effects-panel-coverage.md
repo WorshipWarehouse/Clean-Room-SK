@@ -30,6 +30,29 @@ the samples. They are measured against each other rather than against a table of
 Because a failing case prints both measured numbers, a regression names the control it broke rather
 than only the assertion.
 
+## The head that carries it
+
+`fc5cbf40d8bc80ed2bc982be8ca9ffd330fb2ded`, pushed to `main` at 18:44:13 on 2026-11-11. Every
+workflow is terminal green on it:
+
+- **build** `43080592278` (attempt 2), 18:45:23-18:47:24: `Build (debug, with tests)` compiled the whole
+  suite including the new file at 18:45:35-18:46:12, `Test` passed 18:46:13-18:46:20, the release build
+  and the bundle succeeded, the app launched 18:46:55-18:47:03, and the audio, MIDI and licence probes
+  plus the bootstrap check all passed. This is the run in which the six cases above actually executed.
+- **click** `43080593047` (attempt 2) green 18:45:22-18:46:18; **patch-transfer** `43080592029` (attempt 2)
+  green 18:45:21-18:46:07; **session** `43080592416` (attempt 3) green 18:46:18-18:46:56.
+- **concurrency** `43080628905` green 18:44:37-18:45:12, and again as `43081086465` 18:47:31-18:48:19
+  after the build's completion fired the `workflow_run` trigger: the target compiles with complete
+  concurrency checking, the flag is proven to have reached `swiftc`, and no diagnostic lands in the MIDI
+  routing seam. The new test target is part of that compile.
+- **budget** `43080592359` (attempt 7) green 18:48:44-18:49:29: engaged median 911.1 us of a 10,667 us
+  block (8.5%) with a 2,942.1 us worst block (27.6%), bypassed median 536.2 us (5.0%) with a 3,507.8 us
+  worst (32.9%), the chain 1.7x the dry path. Nothing in this commit touches a DSP file, so those are
+  the effect-chain figures this repository already carried. Attempt 2 had measured the same cost
+  (engaged median 1,010.6 us) and failed only on a single 18,117 us stalled block in the *bypassed*
+  path - a scheduler stall on the runner rather than a render cost - which is why the job was re-run
+  rather than the gate loosened.
+
 ## What this proves and what it does not
 
 Proven: the panel's entry point is wired to the patch, the patch reaches the render thread, each of
