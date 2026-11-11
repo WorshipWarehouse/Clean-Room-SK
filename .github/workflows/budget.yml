@@ -1,0 +1,57 @@
+name: budget
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Sources/**"
+      - "Tests/**"
+      - "Package.swift"
+      - ".github/workflows/budget.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push supersedes the older run, but the path filter above keeps a
+# docs-only commit from cancelling a measurement it did not change.
+concurrency:
+  group: budget-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Report the toolchain
+        run: |
+          set -o pipefail
+          swift --version
+
+      # Only the budget test runs here, so the measurement is the whole point of
+      # the job. The build workflow runs the same test inside the full suite, and
+      # that is where the budget is enforced as a gate.
+      - name: Measure one render block
+        run: |
+          set -o pipefail
+          swift test --filter RenderBudgetTests 2>&1 | tee /tmp/budget.log
+
+      # The test prints its measurements as RENDER_BUDGET lines. Surface them as
+      # annotations so the numbers are readable from the run itself, on a pass as
+      # well as on a failure.
+      - name: Report the measured budget
+        if: always()
+        run: |
+          set -o pipefail
+          lines=$(grep -E "RENDER_BUDGET" /tmp/budget.log | sed -E 's/^.*(RENDER_BUDGET)/\1/' | sort -u || true)
+          if [ -z "$lines" ]; then
+            echo "::warning::the budget test printed no RENDER_BUDGET line"
+          fi
+          printf '%s\n' "$lines" | while IFS= read -r line; do
+            if [ -n "$line" ]; then
+              echo "::notice::$line"
+            fi
+          done
