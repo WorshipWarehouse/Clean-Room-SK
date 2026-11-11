@@ -520,16 +520,17 @@ struct LayerRow: View {
 
             HStack(spacing: 10) {
                 Picker(
-                    "Timbre",
+                    "Instrument",
                     selection: Binding(
-                        get: { layer.timbre },
-                        set: { model.setLayerTimbre(layer.id, timbre: $0) }
+                        get: { layer.instrument },
+                        set: { model.setLayerInstrument(layer.id, instrumentID: $0) }
                     )
                 ) {
-                    Text("Additive keys").tag(KeyLayer.Timbre.keys)
-                    Text("FM bell").tag(KeyLayer.Timbre.bell)
+                    ForEach(InstrumentCatalogue.builtIn) { instrument in
+                        Text(instrument.name).tag(instrument.id)
+                    }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 .labelsHidden()
                 .frame(width: 210)
 

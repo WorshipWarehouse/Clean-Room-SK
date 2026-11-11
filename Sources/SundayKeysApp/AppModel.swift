@@ -437,6 +437,19 @@ final class AppModel: ObservableObject {
         editLayer(layerID) { $0.timbre = timbre }
     }
 
+    /// Chooses the instrument a layer plays from the built-in catalogue.
+    ///
+    /// The id is what the layer stores, so a bank keeps what it sounded like, and the
+    /// engine resolves it to a rung of its own table strip on the live-edit path:
+    /// changing instrument under a held chord changes the tone, not the note.
+    func setLayerInstrument(_ layerID: UInt8, instrumentID: String) {
+        guard InstrumentCatalogue.contains(id: instrumentID) else {
+            bankStatus = "No built-in instrument is called \(instrumentID)"
+            return
+        }
+        editLayer(layerID) { $0.instrument = instrumentID }
+    }
+
     /// Ranges are stored as authored and interpreted as a span, so setting the low
     /// edge above the high edge still leaves a usable layer rather than muting it.
     func setLayerLower(_ layerID: UInt8, note: UInt8) {
