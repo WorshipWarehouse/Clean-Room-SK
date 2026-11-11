@@ -1,13 +1,20 @@
 import Foundation
 
-/// One layer of a patch: a key range, a transpose, a gain, a timbre and whether
-/// the player has it switched on.
+/// One layer of a patch: a key range, a transpose, a gain, the instrument it plays
+/// and whether the player has it switched on.
 ///
 /// The range is the same `NoteRange` the split semantics already use, so a layer
 /// is excluded from a note by construction rather than by a second, parallel
 /// check somewhere else. A disabled layer is excluded by the router, which is why
 /// the enabled flag lives here rather than in the UI.
+///
+/// The instrument is an id from `InstrumentCatalogue`, not a table offset: the
+/// catalogue owns the order of the strip the render thread reads, so a layer that
+/// stored an offset would retune itself the day the catalogue grew. An id the
+/// catalogue does not know resolves to its documented default rather than
+/// silencing the layer.
 public struct KeyLayer: Identifiable, Equatable, Sendable {
+    /// The two-value view a bank written before the catalogue existed carries.
     public enum Timbre: String, Equatable, Sendable, Codable {
         case keys
         case bell
@@ -18,7 +25,8 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     public var range: NoteRange
     public var transpose: Int8
     public var gain: Float
-    public var timbre: Timbre
+    /// The catalogue id this layer plays.
+    public var instrument: String
     public var enabled: Bool
 
     public init(
@@ -28,6 +36,7 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         transpose: Int8 = 0,
         gain: Float = 1,
         timbre: Timbre = .keys,
+        instrument: String? = nil,
         enabled: Bool = true
     ) {
         self.id = id
@@ -35,8 +44,24 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         self.range = range
         self.transpose = transpose
         self.gain = gain
-        self.timbre = timbre
+        self.instrument = instrument ?? timbre.rawValue
         self.enabled = enabled
+    }
+
+    /// The legacy two-value view over `instrument`.
+    ///
+    /// Reading maps any catalogue instrument to the two names a pre-catalogue bank
+    /// can hold; writing selects one of those two instruments. It is a view rather
+    /// than a second stored field, so the two can never disagree.
+    public var timbre: Timbre {
+        get { InstrumentCatalogue.instrument(id: instrument).isBellLike ? .bell : .keys }
+        set { instrument = newValue.rawValue }
+    }
+
+    /// The rung this layer reads in the render thread's table strip. Resolved in
+    /// one place so the engine, the instrument and the tests share the lookup.
+    public var instrumentRung: Int {
+        InstrumentCatalogue.rung(for: instrument)
     }
 
     /// The patch the instrument starts with: a full-range keys layer and a bell
@@ -44,14 +69,16 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     /// the overlap sound twice) and exclusion (notes below the bell range sound
     /// once).
     public static let defaultPatch: [KeyLayer] = [
-        KeyLayer(id: 0, name: "Keys", range: NoteRange(36, 96), gain: 0.85, timbre: .keys),
-        KeyLayer(id: 1, name: "Bell", range: NoteRange(72, 96), gain: 0.45, timbre: .bell),
+        KeyLayer(id: 0, name: "Keys", range: NoteRange(36, 96), gain: 0.85, instrument: "keys"),
+        KeyLayer(id: 1, name: "Bell", range: NoteRange(72, 96), gain: 0.45, instrument: "bell"),
     ]
 }
 
-// Custom decoding rather than the synthesised conformance: a bank written before
-// a field existed must still load, with the field taking its documented default
-// instead of failing the whole bank.
+// Custom decoding rather than the synthesised conformance: a bank written before a
+// field existed must still load, with the field taking its documented default
+// instead of failing the whole bank. The instrument is the third such field: a bank
+// written before the catalogue carries only `timbre`, so the timbre is read as the
+// instrument when no id is present, and an unknown id is kept verbatim.
 extension KeyLayer: Codable {
     private enum CodingKeys: String, CodingKey {
         case id
@@ -60,6 +87,7 @@ extension KeyLayer: Codable {
         case transpose
         case gain
         case timbre
+        case instrument
         case enabled
     }
 
@@ -70,7 +98,8 @@ extension KeyLayer: Codable {
         range = try container.decode(NoteRange.self, forKey: .range)
         transpose = try container.decodeIfPresent(Int8.self, forKey: .transpose) ?? 0
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
-        timbre = try container.decodeIfPresent(Timbre.self, forKey: .timbre) ?? .keys
+        let legacy = try container.decodeIfPresent(Timbre.self, forKey: .timbre) ?? .keys
+        instrument = try container.decodeIfPresent(String.self, forKey: .instrument) ?? legacy.rawValue
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 
@@ -81,6 +110,7 @@ extension KeyLayer: Codable {
         try container.encode(range, forKey: .range)
         try container.encode(transpose, forKey: .transpose)
         try container.encode(gain, forKey: .gain)
+        try container.encode(instrument, forKey: .instrument)
         try container.encode(timbre, forKey: .timbre)
         try container.encode(enabled, forKey: .enabled)
     }

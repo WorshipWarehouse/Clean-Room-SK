@@ -11,6 +11,12 @@ import Foundation
 /// and does not use closures; it reads preallocated storage and writes the
 /// supplied buffer.
 ///
+/// Instruments
+/// -----------
+/// The voices read one strip of tables built from `InstrumentCatalogue.tables()`, in
+/// the catalogue's order: a layer's table is `rung * tableLength`. A layer stores a
+/// catalogue id rather than an offset, so the strip can grow without retuning a bank.
+///
 /// Envelope
 /// --------
 /// Attack is linear and starts at exactly zero, so a note never begins with a
@@ -54,6 +60,8 @@ public final class PolyphonicInstrument {
     private let voices: UnsafeMutableBufferPointer<Voice>
     private let tableData: UnsafeMutablePointer<Float>
     private let tableLength: Int
+    /// The number of tables the strip holds, which is the catalogue's count.
+    private let tableCount: Int
     /// Table offset per layer id, mutated only on the render thread by a
     /// `setLayerTimbre` command. A raw buffer rather than an array so retargeting
     /// a layer mid-performance cannot trigger copy-on-write bookkeeping.
@@ -95,21 +103,30 @@ public final class PolyphonicInstrument {
         releaseFrames = max(1, Float(0.220 * rate))
         stealFrames = max(1, Float(0.004 * rate))
 
-        let keys = WaveTable.keys()
-        let bell = WaveTable.bell()
-        let length = keys.size
+        // One table per catalogue entry, in rung order. Every table is the same
+        // length, which is what lets a layer's rung be a single multiplication.
+        let tables = InstrumentCatalogue.tables()
+        let length = tables.first?.size ?? 2048
+        let rungs = max(1, tables.count)
         tableLength = length
+        tableCount = rungs
 
-        tableData = UnsafeMutablePointer<Float>.allocate(capacity: length * 2)
-        for index in 0..<length {
-            tableData[index] = keys.samples[index]
-            tableData[length + index] = bell.samples[index]
+        tableData = UnsafeMutablePointer<Float>.allocate(capacity: length * rungs)
+        var rung = 0
+        while rung < tables.count {
+            let table = tables[rung]
+            var index = 0
+            while index < length {
+                tableData[rung * length + index] = table.samples[index]
+                index += 1
+            }
+            rung += 1
         }
 
         layerTimbre = UnsafeMutablePointer<Int>.allocate(capacity: 128)
         layerTimbre.initialize(repeating: 0, count: 128)
         for layer in layers {
-            layerTimbre[Int(layer.id) & 0x7F] = layer.timbre == .bell ? length : 0
+            layerTimbre[Int(layer.id) & 0x7F] = layer.instrumentRung * length
         }
 
         voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: voiceLimit)
@@ -122,7 +139,7 @@ public final class PolyphonicInstrument {
     deinit {
         voices.deinitialize()
         voices.deallocate()
-        tableData.deinitialize(count: tableLength * 2)
+        tableData.deinitialize(count: tableLength * tableCount)
         tableData.deallocate()
         layerTimbre.deinitialize(count: 128)
         layerTimbre.deallocate()
@@ -150,7 +167,11 @@ public final class PolyphonicInstrument {
         case .channelPressure:
             setPressure(normalised: command.velocity)
         case .setLayerTimbre:
-            layerTimbre[Int(command.layer) & 0x7F] = command.note == 1 ? tableLength : 0
+            // `note` carries a catalogue rung here. Unknown rungs clamp to the top
+            // table rather than reading past the strip.
+            let requested = Int(command.note)
+            let rung = min(max(requested, 0), tableCount - 1)
+            layerTimbre[Int(command.layer) & 0x7F] = rung * tableLength
         }
     }
 
@@ -158,7 +179,6 @@ public final class PolyphonicInstrument {
     public func render(into buffer: UnsafeMutableBufferPointer<Float>, frameCount: Int) {
         let frames = min(frameCount, buffer.count)
         var frame = 0
-
         while frame < frames {
             var mix: Float = 0
             var index = 0

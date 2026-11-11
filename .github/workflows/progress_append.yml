@@ -1,0 +1,34 @@
+name: progress-append
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  append:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+      - name: Wire the instrument picker
+        run: python3 tools/apply_instrument_ui.py
+      - name: Append the milestones to progress
+        run: cat docs/re/progress-addendum.md >> docs/progress.md
+      - name: Append the inventory addendum
+        run: cat docs/re/inventory-addendum.md >> docs/feature-inventory.md
+      - name: Remove the temporary files
+        run: git rm docs/re/progress-addendum.md docs/re/inventory-addendum.md tools/apply_instrument_ui.py
+      - name: Verify the model method
+        run: grep -q setLayerInstrument Sources/SundayKeysApp/AppModel.swift
+      - name: Verify the window picker
+        run: grep -q InstrumentCatalogue.builtIn Sources/SundayKeysApp/ContentView.swift
+      - name: Set the committer email
+        run: git config user.email actions@users.noreply.github.com
+      - name: Set the committer name
+        run: git config user.name github-actions
+      - name: Commit
+        run: git commit -a -m "Append the effect and budget milestones and wire the instrument picker"
+      - name: Push
+        run: git push

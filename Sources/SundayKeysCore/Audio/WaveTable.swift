@@ -59,4 +59,45 @@ public struct WaveTable: Sendable {
         }
         return WaveTable(normalising: table)
     }
+
+    /// Soft pad: the same additive idea as `keys` with a steeper roll-off and the
+    /// even partials pushed further down, so it sits under a band without the
+    /// struck upper harmonics. Chosen for a sustained layer, not traced from the
+    /// application being studied.
+    public static func pad() -> WaveTable {
+        var partials: [(multiple: Double, amplitude: Double)] = []
+        for harmonic in 1...8 {
+            let amplitude = 1.0 / pow(Double(harmonic), 2.6)
+            let weight = harmonic % 2 == 0 ? 0.35 : 1.0
+            partials.append((Double(harmonic), amplitude * weight))
+        }
+        return WaveTable(partials: partials, size: 2048)
+    }
+
+    /// Drawbar organ: odd partials only, each at one over its harmonic number,
+    /// which is the hollow square-ish tone an organ registration is built from.
+    /// The registration itself is this repository's own.
+    public static func organ() -> WaveTable {
+        var partials: [(multiple: Double, amplitude: Double)] = []
+        for harmonic in 1...9 where harmonic % 2 == 1 {
+            partials.append((Double(harmonic), 1.0 / Double(harmonic)))
+        }
+        return WaveTable(partials: partials, size: 2048)
+    }
+
+    /// Tine piano: two-operator FM at a lower modulation index than `bell`, plus a
+    /// quiet third-harmonic body, so it is rounder than the bell and brighter
+    /// than the additive keys table.
+    public static func electricPiano() -> WaveTable {
+        let size = 2048
+        var table = [Float](repeating: 0, count: size)
+        for index in 0..<size {
+            let phase = (Double(index) / Double(size)) * 2 * Double.pi
+            let modulator = sin(phase * 2.0) * 0.9
+            let carrier = sin(phase + modulator)
+            let body = 0.18 * sin(phase * 3.0)
+            table[index] = Float(carrier * 0.9 + body)
+        }
+        return WaveTable(normalising: table)
+    }
 }

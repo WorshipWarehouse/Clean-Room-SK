@@ -79,16 +79,17 @@ public final class RealtimeKeysoundEngine {
     /// Switches the whole patch in one step.
     ///
     /// Routing changes immediately on the producer side, so the next keystroke uses
-    /// the new ranges, transposes, gains and enabled states. The new timbres and the
-    /// new effect settings are published to the render thread without a lock, so no
-    /// allocation is introduced on the audio path.
+    /// the new ranges, transposes, gains and enabled states. The new instruments and
+    /// the new effect settings are published to the render thread without a lock, so
+    /// no allocation is introduced on the audio path: an instrument travels as the
+    /// rung of the catalogue's table strip that `PolyphonicInstrument` reads.
     ///
     /// `releasingVoices` is what keeps a key held across a switch from hanging on a
     /// layer that no longer exists, and because release is a 220 ms fade rather
     /// than a cut, the change is heard as a tail under the new patch. A live edit
-    /// of the patch already being played passes `false`: ranges, timbres and effects
-    /// still update, but the chord under the player's hands keeps sounding, because
-    /// releasing it on every slider step would be heard as a cut.
+    /// of the patch already being played passes `false`: ranges, instruments and
+    /// effects still update, but the chord under the player's hands keeps sounding,
+    /// because releasing it on every slider step would be heard as a cut.
     public func setPatch(_ newPatch: Patch, releasingVoices: Bool = true) {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
@@ -101,7 +102,7 @@ public final class RealtimeKeysoundEngine {
             enqueue(RenderCommand(
                 kind: .setLayerTimbre,
                 layer: layer.id,
-                note: layer.timbre == .bell ? 1 : 0
+                note: UInt8(clamping: layer.instrumentRung)
             ))
             index += 1
         }
@@ -155,9 +156,9 @@ public final class RealtimeKeysoundEngine {
         enqueue(RenderCommand(kind: .allNotesOff))
     }
 
-    /// Producer side. Transposes every sounding voice by a normalised bend,
-    /// -1 to 1. The command rides the ring notes use, so a wheel move is heard
-    /// within a buffer period and never blocks the render thread.
+    /// Producer side. Transposes every sounding voice by a normalised bend, -1 to 1.
+    /// The command rides the ring notes use, so a wheel move is heard within a
+    /// buffer period and never blocks the render thread.
     public func pitchBend(_ normalised: Float) {
         enqueue(RenderCommand(kind: .pitchBend, velocity: normalised))
     }

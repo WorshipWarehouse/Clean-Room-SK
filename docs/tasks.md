@@ -35,29 +35,46 @@ kept short on purpose: the evidence for each item lives in `docs/progress.md`, t
       (15.7%) — the chain costs 1.7x the dry path. CI fails if the engaged median takes more than a
       quarter of the block or if any single block overruns it, and `.github/workflows/budget.yml`
       prints the numbers as annotations on a pass as well as a failure.
+- [x] **Instrument catalogue** — `InstrumentCatalogue` in `Sources/SundayKeysCore/Catalogue/InstrumentCatalogue.swift`
+      ships five original synthesised voices (`keys`, `bell`, `pad`, `organ`, `electricPiano`) built from
+      `WaveTable`, and the array's index is the render thread's table rung. `KeyLayer.instrument` is the
+      stored selection, with `timbre` kept as a computed legacy view so a pre-catalogue bank still loads;
+      `PolyphonicInstrument` reads one table strip and a layer's rung rather than a bell flag;
+      `RealtimeKeysoundEngine.setPatch` publishes every layer's rung on the same lock-free path the
+      timbres used; the layer editor's picker offers the catalogue through
+      `AppModel.setLayerInstrument(_:instrumentID:)`. `InstrumentCatalogueTests` requires five unique
+      ids and rungs, an unknown id falling back to `keys` on rung 0, a bank round trip keeping `pad`, a
+      layer encoded without `instrument` decoding from its `timbre`, every pair of instruments rendering
+      a tone at least 0.05 apart after the attack, an engine retargeted by `setPatch` rendering
+      sample-identical audio to one built on that instrument (1e-6), and `releasingVoices: false` keeping
+      the held voice.
 
 ## Next
-- [ ] **Device latency** — the budget above is DSP cost measured in isolation on a runner with no
-      output device. The round trip through Core Audio, the buffer a real interface asks for, and
-      glitch-free playback on hardware are still unmeasured.
-- [ ] **Effects panel coverage** — the panel controls exist, but nobody has looked at the window; a
-      pass should drive it through the probes and record what it does to the sound.
-- [ ] **Controller coverage** — one mapped layout is tested; learn-mode against a physical controller
-      has not been exercised because none is attached.
-- [ ] **Instrument management** — the catalogue models and the download path are not built; sounds are
-      synthesised wavetables, not sampled libraries.
-- [ ] **Multi-output routing** — `AudioEffectApi`-level multi-output behaviour in the original is
-      Observed by name only; nothing here routes to more than the default output.
+- [ ] **Effects panel coverage** — the panel controls exist and write through `AppModel.updateEffects`,
+      but nobody has seen the window; a pass should drive the same effect edits the panel makes through
+      a probe and record what they do to the rendered samples.
 
 ## Blocked, and why
 
 - **Nothing has been heard.** No output device, no microphone, no ear and no window are reachable from
   this environment, so every audio claim rests on measured samples and the hosted runner's probes,
   never on listening.
-- **The render budget is DSP cost in isolation**: 999 µs of a 10.67 ms block is what the chain costs
-  here, on a machine with no interface attached, not what a player would hear.
-- **No controller is attached**, so mappings are exercised by synthetic events only.
-- **The window has never been seen**, so layout, focus and panel behaviour are unverified by eye.
+- **Device latency is unmeasurable here.** The render budget is DSP cost on a machine with no output
+  device; the round trip through Core Audio, the buffer a real interface asks for and glitch-free
+  playback all need hardware that this environment does not have, so the item is recorded rather than
+  guessed at.
+- **No controller is attached.** Mappings are exercised by synthetic events through `MIDIEventRouter`;
+  learn-mode against a physical controller, and the CC numbers the original uses (Unknown), cannot be
+  exercised here.
+- **Multi-output routing needs more than one device.** `ExclusiveMultiOutMixer`, `MultiOutMixer` and
+  `OutputDeviceMapping` are Observed names in the original, and nothing here routes beyond the default
+  output, because a second device does not exist in this environment.
+- **Purchased instrument downloads and sample libraries cannot be built here.** The original's
+  `InstrumentDownloader`, `/api/v1/instruments/search` and `aupresetUrl` are Observed names with an
+  Unknown wire and an Unknown container format, the content is licensed and was not copied, and there
+  is no entitlement to download it; the catalogue above is synthesised for that reason.
+- **The window has never been seen**, so layout, focus and panel behaviour are unverified by eye, and
+  the instrument picker is compiled and tested but not viewed.
 - **The original app's licence wire, effect parameter ranges, split semantics, MIDI CC numbers and
   session contents remain Unknown** (`docs/feature-inventory.md`, Known limits), so no parity is
   claimed for them.
