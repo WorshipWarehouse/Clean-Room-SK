@@ -31,6 +31,22 @@ jobs:
           set -o pipefail
           swift --version
 
+      - name: Fix the test's argument order before applying
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          # Swift requires a memberwise call's arguments in declaration order.
+          path = pathlib.Path("Tests/SundayKeysCoreTests/LayerEnvelopeTests.swift")
+          text = path.read_text(encoding="utf-8")
+          old = "LayerEnvelope(sustain: 1, decay: 2)"
+          new = "LayerEnvelope(decay: 2, sustain: 1)"
+          if old not in text:
+              raise SystemExit(f"no such call to reorder: {old}")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          print("reordered the memberwise call")
+          PY
+
       - name: Apply the patch
         run: |
           python3 - <<'PY'
@@ -51,13 +67,13 @@ jobs:
           PY
           if ! python3 tools/envelope_patch.py > patch.log 2>&1; then
             cat patch.log
-            tail -n 5 patch.log | while IFS= read -r line; do echo "::error title=patch::$line"; done
+            tail -n 4 patch.log | while IFS= read -r line; do echo "::error title=patch::$line"; done
             exit 1
           fi
           cat patch.log
           if ! python3 tools/envelope_ui.py > ui.log 2>&1; then
             cat ui.log
-            tail -n 5 ui.log | while IFS= read -r line; do echo "::error title=ui::$line"; done
+            tail -n 4 ui.log | while IFS= read -r line; do echo "::error title=ui::$line"; done
             exit 1
           fi
           cat ui.log
@@ -86,21 +102,19 @@ jobs:
       - name: Build with tests
         run: |
           if ! swift build --build-tests > build.log 2>&1; then
-            grep -E "error:" build.log | head -n 8 | while IFS= read -r line; do echo "::error title=build::$line"; done
-            tail -n 20 build.log
+            grep -E "error:" build.log | sed 's/^ *//' | sort -u | head -n 6 | while IFS= read -r line; do echo "::error title=build::$line"; done
             exit 1
           fi
-          tail -n 5 build.log
+          tail -n 4 build.log
           rm -f build.log
 
       - name: Test
         run: |
           if ! swift test > test.log 2>&1; then
-            grep -E "error:|: failed|XCTAssert" test.log | head -n 8 | while IFS= read -r line; do echo "::error title=test::$line"; done
-            tail -n 25 test.log
+            grep -E "error:|XCTAssert" test.log | sed 's/^ *//' | sort -u | head -n 6 | while IFS= read -r line; do echo "::error title=test::$line"; done
             exit 1
           fi
-          tail -n 8 test.log
+          tail -n 6 test.log
           rm -f test.log
 
       - name: Write the record

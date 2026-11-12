@@ -6,6 +6,12 @@ name: click
 # but may not create or update one, so a step cannot be added to build.yml from a
 # runner. A probe that never runs proves nothing, so the proof gets a workflow of its
 # own, authored here rather than patched there.
+#
+# It also hosts the layer editor's row offscreen, because the row's controls are the
+# same headless AppKit objects the click's own probe starts without a window: a
+# control that cannot be found by name (a hosted SwiftUI slider carries no
+# identifier) cannot be proven, and this workflow is where the window's wiring is
+# exercised without a display.
 on:
   push:
     branches: [main]
@@ -45,3 +51,10 @@ jobs:
         run: |
           set -o pipefail
           bash tools/metronome_smoke.sh
+
+      # The window's own panel controls, hosted offscreen with no window and no display:
+      # every slider the layer editor draws is found by name and moved through the model.
+      - name: Probe the layer editor's controls
+        run: |
+          set -o pipefail
+          swift test --filter LayerRowViewTests
