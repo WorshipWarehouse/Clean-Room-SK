@@ -438,6 +438,18 @@ final class AppModel: ObservableObject {
         editLayer(layerID) { $0.pan = min(max(pan, -1), 1) }
     }
 
+    /// Moves a layer's low-pass corner and resonance on the same live-edit path
+    /// the other layer controls take: the patch is republished and no voice is
+    /// released, so a tone turned under a held chord changes the sound without
+    /// cutting it. Both values are clamped here so nothing stored can leave the
+    /// law's range.
+    func setLayerFilter(_ layerID: UInt8, cutoff: Float, resonance: Float) {
+        editLayer(layerID) {
+            $0.filterCutoff = LayerFilter.clampCutoff(cutoff)
+            $0.filterResonance = LayerFilter.clampResonance(resonance)
+        }
+    }
+
     func setLayerTranspose(_ layerID: UInt8, semitones: Int8) {
         editLayer(layerID) { $0.transpose = min(max(semitones, -24), 24) }
     }

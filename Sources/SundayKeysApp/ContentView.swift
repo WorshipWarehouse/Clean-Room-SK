@@ -381,7 +381,47 @@ struct LayerRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 64, alignment: .leading)
 
-                Spacer()
+            Slider(
+                value: Binding(
+                    get: { Double(LayerFilter.octaves(fromCutoff: layer.filterCutoff)) },
+                    set: {
+                        model.setLayerFilter(
+                            layer.id,
+                            cutoff: LayerFilter.cutoff(fromOctaves: Float($0)),
+                            resonance: layer.filterResonance
+                        )
+                    }
+                ),
+                in: 0...Double(LayerFilter.octaveSpan)
+            )
+            .frame(width: 120)
+            
+            Text(filterText)
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 82, alignment: .leading)
+            
+            Slider(
+                value: Binding(
+                    get: { Double(layer.filterResonance) },
+                    set: {
+                        model.setLayerFilter(
+                            layer.id,
+                            cutoff: layer.filterCutoff,
+                            resonance: Float($0)
+                        )
+                    }
+                ),
+                in: 0...1
+            )
+            .frame(width: 90)
+            
+            Text(String(format: "res %.2f", layer.filterResonance))
+                .font(.system(.caption, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: 74, alignment: .leading)
+            
+            Spacer()
             }
             .disabled(!layer.enabled)
         }
@@ -390,7 +430,17 @@ struct LayerRow: View {
 
     /// The position in the window's own words: L and R rather than a
     /// signed number, which is how a player thinks about where a layer sits.
-    private var panText: String {
+            /// The corner in the window's own words: a player reads tone as open or
+            /// as a frequency, not as a slider position.
+            private var filterText: String {
+                if layer.filterIsOpen { return "tone open" }
+                if layer.filterCutoff >= 1000 {
+                    return String(format: "tone %.1fk", layer.filterCutoff / 1000)
+                }
+                return String(format: "tone %.0f Hz", layer.filterCutoff)
+            }
+            
+            private var panText: String {
         if abs(layer.pan) < 0.005 { return "pan C" }
         if layer.pan < 0 {
             return String(format: "pan L%.2f", -layer.pan)

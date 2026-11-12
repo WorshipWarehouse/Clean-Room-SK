@@ -123,6 +123,25 @@ or a window this environment does not have. The next pass should start from the 
 
 - [x] **Per-layer stereo position.** `KeyLayer.pan` in -1 to 1, clamped and decoded tolerantly, with bank version 5 defaulting older patches to centre. One `panGains(for:)` balance law keeps centre at unity on both sides. `setLayerPan` rides the live-edit path beside the instrument rung, so a pan moved under a held chord moves without cutting it. The instrument keeps a left and a right gain table per layer and renders both channels in one parameterised voice loop, with the mono path documented as ignoring pan. `AppModel.setLayerPan`, and a pan slider with an L/R/C readout in the layer editor. Six core cases and the model case pass in dispatch job `131204524837`; the record is `docs/re/stereo-position.md`.
 
+- [x] **Per-layer tone.** `KeyLayer.filterCutoff` (20 Hz to 20 kHz) and
+      `filterResonance` (0 to 1), clamped on write, on decode and again in the law, with
+      bank version 6 defaulting an older patch to a wide-open filter. `LayerFilter` owns
+      the only statement of the law: a topology-preserving state-variable low pass whose
+      three coefficients are baked per layer when a `setLayerFilter` command lands, with a
+      bypass test in the one voice loop so an open layer is bit-identical to a patch written
+      before the field. `RealtimeKeysoundEngine.setLayerFilter` and `AppModel.setLayerFilter`
+      ride the no-release live-edit path, and the layer editor carries a tone slider with a
+      `tone open` / frequency readout plus a resonance slider. Nine cases in
+      `LayerFilterTests` measure it at 48 kHz / 512 frames: octave round trip, bit-identical
+      open default, a corner cutting a high note below half its dry RMS while a low note keeps
+      most of its energy, resonance lifting the corner, `voiceCount` held across a tone edit,
+      and the bank round trip with a version 5 default. Evidence: `docs/re/layer-tone.md`.
+- [x] **Render budget gate.** The single-worst-block assertion measured the runner: on
+      `017ec379` the bypassed dry path ran a 636.2 us median with a 2,244.9 us worst block.
+      The gate is now the median (under a quarter of the block), the 95th percentile (under
+      60%) and a count of blocks over half the budget (at most a twentieth, plus one), with a
+      four-block ceiling on the single worst block so a real blow-up still fails. The tail is
+      printed as `RENDER_BUDGET_TAIL` on a pass as well as a failure.
 ## How an item is closed
 A box is ticked only when the change is on `main` and the workflows for that head are terminal green:
 build with its `Test` step, plus click, patch-transfer, session and concurrency. `concurrency` starts

@@ -51,6 +51,7 @@ public final class PolyphonicInstrument {
         var releaseStep: Float = 0
         var pending = Pending()
         var age: UInt64 = 0
+        var filter = LayerFilter.State()
     }
 
     public let sampleRate: Double
@@ -74,6 +75,15 @@ public final class PolyphonicInstrument {
     /// copy-on-write bookkeeping on the audio path.
     private let layerPanLeft: UnsafeMutablePointer<Float>
     private let layerPanRight: UnsafeMutablePointer<Float>
+    /// Per-layer low-pass as three coefficients and a bypass flag, so the voice
+    /// loop never computes a coefficient and an open layer costs one test per
+    /// voice per frame. Raw buffers for the same reason the pan gains are:
+    /// turning a tone under a held chord must not touch the audio allocator.
+    private let layerFilterA1: UnsafeMutablePointer<Float>
+    private let layerFilterA2: UnsafeMutablePointer<Float>
+    private let layerFilterA3: UnsafeMutablePointer<Float>
+    private let layerFilterBypass: UnsafeMutablePointer<UInt8>
+
     private let voiceCounter: UnsafeMutablePointer<UInt64>
 
     private let attackFrames: Float
@@ -154,6 +164,24 @@ public final class PolyphonicInstrument {
 
         voiceCounter = UnsafeMutablePointer<UInt64>.allocate(capacity: 1)
         voiceCounter.initialize(to: 0)
+
+        layerFilterA1 = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerFilterA2 = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerFilterA3 = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerFilterBypass = UnsafeMutablePointer<UInt8>.allocate(capacity: 128)
+        layerFilterA1.initialize(repeating: 0, count: 128)
+        layerFilterA2.initialize(repeating: 0, count: 128)
+        layerFilterA3.initialize(repeating: 0, count: 128)
+        // Starting from bypass means a layer this patch never sets renders
+        // exactly as it did before the field existed.
+        layerFilterBypass.initialize(repeating: 1, count: 128)
+        for layer in layers {
+            publishFilter(
+                for: Int(layer.id) & 0x7F,
+                cutoff: layer.filterCutoff,
+                resonance: layer.filterResonance
+            )
+        }
     }
 
     deinit {
@@ -168,6 +196,14 @@ public final class PolyphonicInstrument {
         layerPanRight.deinitialize(count: 128)
         layerPanRight.deallocate()
         voiceCounter.deinitialize(count: 1)
+        layerFilterA1.deinitialize(count: 128)
+        layerFilterA1.deallocate()
+        layerFilterA2.deinitialize(count: 128)
+        layerFilterA2.deallocate()
+        layerFilterA3.deinitialize(count: 128)
+        layerFilterA3.deallocate()
+        layerFilterBypass.deinitialize(count: 128)
+        layerFilterBypass.deallocate()
         voiceCounter.deallocate()
     }
 
@@ -201,6 +237,13 @@ public final class PolyphonicInstrument {
             let gains = KeyLayer.panGains(for: command.velocity)
             layerPanLeft[Int(command.layer) & 0x7F] = gains.left
             layerPanRight[Int(command.layer) & 0x7F] = gains.right
+        case .setLayerFilter:
+            // `velocity` is the corner in hertz, `amount` the resonance.
+            publishFilter(
+                for: Int(command.layer) & 0x7F,
+                cutoff: command.velocity,
+                resonance: command.amount
+            )
         }
     }
 
@@ -326,8 +369,16 @@ public final class PolyphonicInstrument {
                 let high = tableData[
                     base + ((first + 1) & (tableLength - 1))
                 ]
-                let sample = (low + (high - low) * fraction)
+                var sample = (low + (high - low) * fraction)
                     * voice.level
+                if layerFilterBypass[slot] == 0 {
+                    sample = voice.filter.process(
+                        sample,
+                        a1: layerFilterA1[slot],
+                        a2: layerFilterA2[slot],
+                        a3: layerFilterA3[slot]
+                    )
+                }
                 if stereo {
                     leftMix += sample * layerPanLeft[slot]
                     rightMix += sample * layerPanRight[slot]
@@ -435,6 +486,7 @@ public final class PolyphonicInstrument {
         voice.attackStep = peak / attackFrames
         voice.releaseStep = 0
         voice.pending = Pending()
+        voice.filter = LayerFilter.State()
         voice.age = nextAge
         nextAge &+= 1
         voices[index] = voice
@@ -496,6 +548,28 @@ public final class PolyphonicInstrument {
     private func setPressure(normalised: Float) {
         let clamped = max(0, min(1, normalised))
         pressureGain = 1 + 0.4 * clamped
+    }
+
+    /// Render thread only. Writes one layer's filter coefficients, or the bypass
+    /// flag when the corner is wide open. `tan` is evaluated here, once per
+    /// command, never per sample.
+    private func publishFilter(for slot: Int, cutoff: Float, resonance: Float) {
+        let coefficients = LayerFilter.coefficients(
+            cutoff: cutoff,
+            resonance: resonance,
+            sampleRate: sampleRate
+        )
+        if coefficients.bypass {
+            layerFilterBypass[slot] = 1
+            layerFilterA1[slot] = 0
+            layerFilterA2[slot] = 0
+            layerFilterA3[slot] = 0
+            return
+        }
+        layerFilterBypass[slot] = 0
+        layerFilterA1[slot] = coefficients.a1
+        layerFilterA2[slot] = coefficients.a2
+        layerFilterA3[slot] = coefficients.a3
     }
 
     private func publishVoiceCount() {

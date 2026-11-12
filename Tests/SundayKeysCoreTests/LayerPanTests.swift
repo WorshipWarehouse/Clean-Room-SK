@@ -152,7 +152,7 @@ final class LayerPanTests: XCTestCase {
             PatchBank.self,
             from: encoded
         )
-        XCTAssertEqual(loaded.version, 5)
+        XCTAssertEqual(loaded.version, 6)
         XCTAssertEqual(
             loaded.patches[0].layers[0].pan,
             -1,

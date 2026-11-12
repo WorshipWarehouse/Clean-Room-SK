@@ -59,8 +59,9 @@ public struct PatchBank: Codable, Equatable, Sendable {
     /// layout, 4 the set list and 5 the per-layer stereo position.
     /// Decoding stays tolerant: an older bank has no such key and loads
     /// with the chain bypassed, the standard controller layout, no set
-    /// list, which the app plays in bank order, and every layer at centre.
-    public static let currentVersion = 5
+    /// list, which the app plays in bank order, and every layer at centre. Version 6 added the per-layer tone, which defaults
+/// wide open.
+    public static let currentVersion = 6
 
     public var version: Int
     public var patches: [Patch]

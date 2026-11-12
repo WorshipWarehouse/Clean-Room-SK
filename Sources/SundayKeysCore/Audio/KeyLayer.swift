@@ -30,6 +30,18 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     /// sets a position renders exactly as it did before this field existed.
     /// The law is stated once, in `panGains(for:)`.
     public var pan: Float
+    /// The low-pass corner a layer's voices are filtered at, in hertz, and how
+    /// much the corner is emphasised. `LayerFilter` states the law once and the
+    /// default is wide open, so a patch that never sets a tone renders exactly as
+    /// it did before the field existed.
+    public var filterCutoff: Float
+    public var filterResonance: Float
+
+    /// Whether the layer's filter does nothing, which is the render path's own
+    /// bypass condition.
+    public var filterIsOpen: Bool {
+        LayerFilter.isOpen(cutoff: filterCutoff, resonance: filterResonance)
+    }
     /// The catalogue id this layer plays.
     public var instrument: String
     public var enabled: Bool
@@ -41,6 +53,8 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         transpose: Int8 = 0,
         gain: Float = 1,
         pan: Float = 0,
+        filterCutoff: Float = LayerFilter.defaultCutoff,
+        filterResonance: Float = LayerFilter.defaultResonance,
         timbre: Timbre = .keys,
         instrument: String? = nil,
         enabled: Bool = true
@@ -51,6 +65,8 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         self.transpose = transpose
         self.gain = gain
         self.pan = min(max(pan, -1), 1)
+        self.filterCutoff = LayerFilter.clampCutoff(filterCutoff)
+        self.filterResonance = LayerFilter.clampResonance(filterResonance)
         self.instrument = instrument ?? timbre.rawValue
         self.enabled = enabled
     }
@@ -109,6 +125,8 @@ extension KeyLayer: Codable {
         case transpose
         case gain
         case pan
+        case filterCutoff
+        case filterResonance
         case timbre
         case instrument
         case enabled
@@ -123,6 +141,14 @@ extension KeyLayer: Codable {
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
         let storedPan = try container.decodeIfPresent(Float.self, forKey: .pan)
         pan = min(max(storedPan ?? 0, -1), 1)
+        filterCutoff = LayerFilter.clampCutoff(
+            try container.decodeIfPresent(Float.self, forKey: .filterCutoff)
+                ?? LayerFilter.defaultCutoff
+        )
+        filterResonance = LayerFilter.clampResonance(
+            try container.decodeIfPresent(Float.self, forKey: .filterResonance)
+                ?? LayerFilter.defaultResonance
+        )
         let legacy = try container.decodeIfPresent(Timbre.self, forKey: .timbre) ?? .keys
         instrument = try container.decodeIfPresent(String.self, forKey: .instrument) ?? legacy.rawValue
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
@@ -136,6 +162,8 @@ extension KeyLayer: Codable {
         try container.encode(transpose, forKey: .transpose)
         try container.encode(gain, forKey: .gain)
         try container.encode(pan, forKey: .pan)
+        try container.encode(filterCutoff, forKey: .filterCutoff)
+        try container.encode(filterResonance, forKey: .filterResonance)
         try container.encode(instrument, forKey: .instrument)
         try container.encode(timbre, forKey: .timbre)
         try container.encode(enabled, forKey: .enabled)

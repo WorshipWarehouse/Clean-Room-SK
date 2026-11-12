@@ -27,18 +27,26 @@ public struct RenderCommand: Equatable, Sendable {
         /// position, -1 fully left to 1 fully right, because the command is
         /// a fixed-size slot and the field is free for this kind.
         case setLayerPan = 7
+
+        /// Sets a layer's low-pass corner and resonance without touching a
+        /// voice. `velocity` carries the corner in hertz and `amount` the
+        /// resonance from 0 to 1, because one float payload is not enough for
+        /// both and the command is a fixed-size slot.
+        case setLayerFilter = 8
     }
 
     public var kind: Kind
     public var layer: UInt8
     public var note: UInt8
     public var velocity: Float
+    public var amount: Float
 
-    public init(kind: Kind, layer: UInt8 = 0, note: UInt8 = 0, velocity: Float = 0) {
+    public init(kind: Kind, layer: UInt8 = 0, note: UInt8 = 0, velocity: Float = 0, amount: Float = 0) {
         self.kind = kind
         self.layer = layer
         self.note = note
         self.velocity = velocity
+        self.amount = amount
     }
 
     /// Neutral contents used to initialise the ring buffer's slots.

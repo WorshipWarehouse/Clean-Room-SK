@@ -109,6 +109,12 @@ public final class RealtimeKeysoundEngine {
                 layer: layer.id,
                 velocity: layer.pan
             ))
+            enqueue(RenderCommand(
+                kind: .setLayerFilter,
+                layer: layer.id,
+                velocity: layer.filterCutoff,
+                amount: layer.filterResonance
+            ))
             index += 1
         }
 
@@ -119,6 +125,18 @@ public final class RealtimeKeysoundEngine {
 
     /// Producer side. Publishes new effect settings and keeps the patch's copy in
     /// step, without touching a single voice.
+    /// Producer side. Publishes one layer's low-pass corner and resonance on the
+    /// ring the other live-edit commands use, so a tone turned under a held
+    /// chord changes what the chord sounds like rather than cutting it.
+    public func setLayerFilter(layer: UInt8, cutoff: Float, resonance: Float) {
+        enqueue(RenderCommand(
+            kind: .setLayerFilter,
+            layer: layer,
+            velocity: cutoff,
+            amount: resonance
+        ))
+    }
+
     public func setEffects(_ settings: EffectsSettings) {
         patch.effects = settings
         effects.apply(settings: settings)
