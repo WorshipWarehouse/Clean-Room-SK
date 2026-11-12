@@ -7,19 +7,31 @@ def chunk(label, numbered, size=3):
         print("::warning::" + label + " " + " || ".join(group))
 
 
-inventory = pathlib.Path("docs/feature-inventory.md").read_text().splitlines()
-hits = [
-    str(index + 1) + ":" + line.strip()
-    for index, line in enumerate(inventory)
-    if "stereo" in line.lower() or "position" in line.lower()
-]
-chunk("inventory", hits)
-
-for name in ("docs/tasks.md", "docs/re/heads.md"):
-    lines = pathlib.Path(name).read_text().splitlines()
-    tail = [
-        str(index + 1) + ":" + line.strip()
-        for index, line in enumerate(lines)
-        if index >= len(lines) - 24 and line.strip()
+def numbered(lines, first, count):
+    return [
+        str(index + 1) + ":" + lines[index].strip()
+        for index in range(first - 1, min(first - 1 + count, len(lines)))
+        if lines[index].strip()
     ]
-    chunk(name.split("/")[-1], tail)
+
+
+inventory = pathlib.Path("docs/feature-inventory.md").read_text().splitlines()
+chunk("inventory", numbered(inventory, 1, 26))
+
+heads = pathlib.Path("docs/re/heads.md").read_text().splitlines()
+chunk("heads", numbered(heads, 1, 30))
+
+tasks = pathlib.Path("docs/tasks.md").read_text().splitlines()
+found = None
+for index, line in enumerate(tasks):
+    if line.strip().lower().startswith("## done"):
+        found = index + 2
+        break
+if found is None:
+    for index, line in enumerate(tasks):
+        if "- [x]" in line:
+            found = index + 1
+            break
+if found is None:
+    raise SystemExit("no done section")
+chunk("tasks", numbered(tasks, found, 12))
