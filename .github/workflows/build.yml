@@ -59,6 +59,22 @@ jobs:
           set -o pipefail
           swift test -v 2>&1 | tee /tmp/test.log
 
+      # The verbose test log is far bigger than a downloaded job log keeps, so the
+      # suite totals are republished as step annotations, which the checks API
+      # returns in full: the counts stay readable even when the log is truncated.
+      - name: Report test totals
+        if: always()
+        run: |
+          set -o pipefail
+          echo "=== TEST SUMMARY BEGIN ==="
+          { grep -hE "Executed [0-9]+ tests?, with" /tmp/test.log || true; } | tail -n 5
+          { grep -hE "Test run with [0-9]+ tests?" /tmp/test.log || true; } | tail -n 5
+          { grep -hE "tests? skipped|Skipped [0-9]+ tests?" /tmp/test.log || true; } | tail -n 5
+          echo "=== TEST SUMMARY END ==="
+          { grep -hE "Executed [0-9]+ tests?, with|Test run with [0-9]+ tests?|tests? skipped|Skipped [0-9]+ tests?" /tmp/test.log || true; } | tail -n 15 | while IFS= read -r line; do
+            echo "::notice::totals: $line"
+          done
+
       - name: Report test diagnostics
         if: failure()
         run: |
