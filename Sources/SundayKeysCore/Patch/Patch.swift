@@ -55,11 +55,12 @@ public struct Patch: Codable, Equatable, Identifiable, Sendable {
 /// The whole set of patches the player has built, plus the set list that orders them
 /// for one service, as written to disk.
 public struct PatchBank: Codable, Equatable, Sendable {
-    /// Version 2 added per-patch effects, 3 the per-patch controller layout and 4 the
-    /// set list. Decoding stays tolerant: an older bank has no such key and loads with
-    /// the chain bypassed, the standard controller layout and no set list, which the
-    /// app plays in bank order.
-    public static let currentVersion = 4
+    /// Version 2 added per-patch effects, 3 the per-patch controller
+    /// layout, 4 the set list and 5 the per-layer stereo position.
+    /// Decoding stays tolerant: an older bank has no such key and loads
+    /// with the chain bypassed, the standard controller layout, no set
+    /// list, which the app plays in bank order, and every layer at centre.
+    public static let currentVersion = 5
 
     public var version: Int
     public var patches: [Patch]

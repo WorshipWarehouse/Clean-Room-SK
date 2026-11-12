@@ -362,11 +362,40 @@ struct LayerRow: View {
                     .foregroundStyle(.secondary)
                     .frame(width: 74, alignment: .leading)
 
+                Slider(
+                    value: Binding(
+                        get: { Double(layer.pan) },
+                        set: {
+                            model.setLayerPan(
+                                layer.id,
+                                pan: Float($0)
+                            )
+                        }
+                    ),
+                    in: -1...1
+                )
+                .frame(width: 110)
+
+                Text(panText)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 64, alignment: .leading)
+
                 Spacer()
             }
             .disabled(!layer.enabled)
         }
         .padding(.vertical, 2)
+    }
+
+    /// The position in the window's own words: L and R rather than a
+    /// signed number, which is how a player thinks about where a layer sits.
+    private var panText: String {
+        if abs(layer.pan) < 0.005 { return "pan C" }
+        if layer.pan < 0 {
+            return String(format: "pan L%.2f", -layer.pan)
+        }
+        return String(format: "pan R%.2f", layer.pan)
     }
 
     private var lowerBinding: Binding<Int> {

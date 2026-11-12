@@ -66,6 +66,14 @@ public final class PolyphonicInstrument {
     /// `setLayerTimbre` command. A raw buffer rather than an array so retargeting
     /// a layer mid-performance cannot trigger copy-on-write bookkeeping.
     private let layerTimbre: UnsafeMutablePointer<Int>
+
+    /// Per-layer position as the two gains a voice's sample is
+    /// multiplied by. Mutated only on the render thread by a
+    /// `setLayerPan` command, and raw buffers for the same reason the
+    /// timbre offsets are: moving a pan under a held chord must not trigger
+    /// copy-on-write bookkeeping on the audio path.
+    private let layerPanLeft: UnsafeMutablePointer<Float>
+    private let layerPanRight: UnsafeMutablePointer<Float>
     private let voiceCounter: UnsafeMutablePointer<UInt64>
 
     private let attackFrames: Float
@@ -129,6 +137,18 @@ public final class PolyphonicInstrument {
             layerTimbre[Int(layer.id) & 0x7F] = layer.instrumentRung * length
         }
 
+        layerPanLeft = UnsafeMutablePointer<Float>
+            .allocate(capacity: 128)
+        layerPanLeft.initialize(repeating: 1, count: 128)
+        layerPanRight = UnsafeMutablePointer<Float>
+            .allocate(capacity: 128)
+        layerPanRight.initialize(repeating: 1, count: 128)
+        for layer in layers {
+            let gains = KeyLayer.panGains(for: layer.pan)
+            layerPanLeft[Int(layer.id) & 0x7F] = gains.left
+            layerPanRight[Int(layer.id) & 0x7F] = gains.right
+        }
+
         voices = UnsafeMutableBufferPointer<Voice>.allocate(capacity: voiceLimit)
         voices.initialize(repeating: Voice())
 
@@ -143,6 +163,10 @@ public final class PolyphonicInstrument {
         tableData.deallocate()
         layerTimbre.deinitialize(count: 128)
         layerTimbre.deallocate()
+        layerPanLeft.deinitialize(count: 128)
+        layerPanLeft.deallocate()
+        layerPanRight.deinitialize(count: 128)
+        layerPanRight.deallocate()
         voiceCounter.deinitialize(count: 1)
         voiceCounter.deallocate()
     }
@@ -172,15 +196,72 @@ public final class PolyphonicInstrument {
             let requested = Int(command.note)
             let rung = min(max(requested, 0), tableCount - 1)
             layerTimbre[Int(command.layer) & 0x7F] = rung * tableLength
+        case .setLayerPan:
+            // `velocity` carries the position, -1 left to 1 right.
+            let gains = KeyLayer.panGains(for: command.velocity)
+            layerPanLeft[Int(command.layer) & 0x7F] = gains.left
+            layerPanRight[Int(command.layer) & 0x7F] = gains.right
         }
     }
 
-    /// Render thread only. Adds into the buffer; the caller clears it first.
-    public func render(into buffer: UnsafeMutableBufferPointer<Float>, frameCount: Int) {
-        let frames = min(frameCount, buffer.count)
+    /// Render thread only. Adds into the buffer; the caller clears it.
+    ///
+    /// The mono path: one buffer cannot carry a position, so this is the
+    /// plain voice mix and every layer's pan is ignored. `renderStereo` is
+    /// the path the app plays through.
+    public func render(
+        into buffer: UnsafeMutableBufferPointer<Float>,
+        frameCount: Int
+    ) {
+        renderVoices(into: buffer, and: nil, frameCount: frameCount)
+    }
+
+    /// Render thread only. Adds into both buffers; the caller clears them.
+    ///
+    /// Each voice goes to both channels through its layer's pan gains, so a
+    /// layer panned hard left contributes nothing to the right channel. A
+    /// centred layer is unity on both sides, which makes this path identical
+    /// to the mono path on a patch that has never set a position.
+    public func renderStereo(
+        intoLeft left: UnsafeMutableBufferPointer<Float>,
+        intoRight right: UnsafeMutableBufferPointer<Float>,
+        frameCount: Int
+    ) {
+        let frames = min(frameCount, min(left.count, right.count))
+        guard frames > 0, let leftBase = left.baseAddress,
+            let rightBase = right.baseAddress else {
+            return
+        }
+        renderVoices(
+            into: UnsafeMutableBufferPointer(
+                start: leftBase, count: frames
+            ),
+            and: UnsafeMutableBufferPointer(
+                start: rightBase, count: frames
+            ),
+            frameCount: frames
+        )
+    }
+
+    /// The one voice loop both paths use.
+    private func renderVoices(
+        into left: UnsafeMutableBufferPointer<Float>,
+        and right: UnsafeMutableBufferPointer<Float>?,
+        frameCount: Int
+    ) {
+        let frames = min(frameCount, left.count)
+        guard frames > 0, let leftBase = left.baseAddress else {
+            return
+        }
+        let rightBase = right?.baseAddress
+        // Hoisted so the per-voice branch is one test per frame.
+        let stereo = rightBase != nil
+
         var frame = 0
         while frame < frames {
-            var mix: Float = 0
+            var monoMix: Float = 0
+            var leftMix: Float = 0
+            var rightMix: Float = 0
             var index = 0
 
             while index < voices.count {
@@ -218,7 +299,12 @@ public final class PolyphonicInstrument {
                         let pending = voice.pending
                         if pending.active {
                             voices[index] = voice
-                            begin(at: index, note: pending.note, layer: pending.layer, peak: pending.velocity)
+                            begin(
+                                at: index,
+                                note: pending.note,
+                                layer: pending.layer,
+                                peak: pending.velocity
+                            )
                             voice = voices[index]
                         } else {
                             voice.stage = .idle
@@ -229,13 +315,25 @@ public final class PolyphonicInstrument {
                     }
                 }
 
-                let base = layerTimbre[Int(voice.layer) & 0x7F]
+                let slot = Int(voice.layer) & 0x7F
+                let base = layerTimbre[slot]
                 let position = voice.phase * Double(tableLength)
                 let first = Int(position)
                 let fraction = Float(position - Double(first))
-                let low = tableData[base + (first & (tableLength - 1))]
-                let high = tableData[base + ((first + 1) & (tableLength - 1))]
-                mix += (low + (high - low) * fraction) * voice.level
+                let low = tableData[
+                    base + (first & (tableLength - 1))
+                ]
+                let high = tableData[
+                    base + ((first + 1) & (tableLength - 1))
+                ]
+                let sample = (low + (high - low) * fraction)
+                    * voice.level
+                if stereo {
+                    leftMix += sample * layerPanLeft[slot]
+                    rightMix += sample * layerPanRight[slot]
+                } else {
+                    monoMix += sample
+                }
 
                 voice.phase += voice.increment * bendRatio
                 if voice.phase >= 1 {
@@ -245,7 +343,13 @@ public final class PolyphonicInstrument {
                 index += 1
             }
 
-            buffer[frame] += mix * mixGain * pressureGain
+            let trim = mixGain * pressureGain
+            if let rightBase {
+                leftBase[frame] += leftMix * trim
+                rightBase[frame] += rightMix * trim
+            } else {
+                leftBase[frame] += monoMix * trim
+            }
             frame += 1
         }
 

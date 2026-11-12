@@ -25,6 +25,11 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     public var range: NoteRange
     public var transpose: Int8
     public var gain: Float
+    /// Where the layer sits between the speakers: -1 hard left, 0 centre,
+    /// 1 hard right. Centre is unity on both sides, so a patch that never
+    /// sets a position renders exactly as it did before this field existed.
+    /// The law is stated once, in `panGains(for:)`.
+    public var pan: Float
     /// The catalogue id this layer plays.
     public var instrument: String
     public var enabled: Bool
@@ -35,6 +40,7 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         range: NoteRange,
         transpose: Int8 = 0,
         gain: Float = 1,
+        pan: Float = 0,
         timbre: Timbre = .keys,
         instrument: String? = nil,
         enabled: Bool = true
@@ -44,6 +50,7 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         self.range = range
         self.transpose = transpose
         self.gain = gain
+        self.pan = min(max(pan, -1), 1)
         self.instrument = instrument ?? timbre.rawValue
         self.enabled = enabled
     }
@@ -56,6 +63,21 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     public var timbre: Timbre {
         get { InstrumentCatalogue.instrument(id: instrument).isBellLike ? .bell : .keys }
         set { instrument = newValue.rawValue }
+    }
+
+    /// The two gains a layer's sample is multiplied by at a position.
+    ///
+    /// Centre is unity on both sides rather than 0.707, so a patch that
+    /// never sets a position renders bit-identically to one written before
+    /// the field existed; a pan moves the layer by attenuating the side it
+    /// leaves. The original's `StereoPanApi` law is Unknown, so this one is
+    /// this repository's own and is stated once so the engine, the window
+    /// and the tests cannot disagree.
+    public static func panGains(for pan: Float)
+        -> (left: Float, right: Float) {
+        let clamped = min(max(pan, -1), 1)
+        return (left: 1 - max(0, clamped),
+                right: 1 + min(0, clamped))
     }
 
     /// The rung this layer reads in the render thread's table strip. Resolved in
@@ -86,6 +108,7 @@ extension KeyLayer: Codable {
         case range
         case transpose
         case gain
+        case pan
         case timbre
         case instrument
         case enabled
@@ -98,6 +121,8 @@ extension KeyLayer: Codable {
         range = try container.decode(NoteRange.self, forKey: .range)
         transpose = try container.decodeIfPresent(Int8.self, forKey: .transpose) ?? 0
         gain = try container.decodeIfPresent(Float.self, forKey: .gain) ?? 1
+        let storedPan = try container.decodeIfPresent(Float.self, forKey: .pan)
+        pan = min(max(storedPan ?? 0, -1), 1)
         let legacy = try container.decodeIfPresent(Timbre.self, forKey: .timbre) ?? .keys
         instrument = try container.decodeIfPresent(String.self, forKey: .instrument) ?? legacy.rawValue
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
@@ -110,6 +135,7 @@ extension KeyLayer: Codable {
         try container.encode(range, forKey: .range)
         try container.encode(transpose, forKey: .transpose)
         try container.encode(gain, forKey: .gain)
+        try container.encode(pan, forKey: .pan)
         try container.encode(instrument, forKey: .instrument)
         try container.encode(timbre, forKey: .timbre)
         try container.encode(enabled, forKey: .enabled)

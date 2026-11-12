@@ -429,6 +429,15 @@ final class AppModel: ObservableObject {
         editLayer(layerID) { $0.gain = min(max(gain, 0), 1.5) }
     }
 
+    /// Moves a layer between the speakers on the same live-edit path the
+    /// other layer controls take: the patch is republished and no voice is
+    /// released, so a chord that is sounding moves rather than being cut.
+    /// The value is clamped here so nothing stored can leave the law's
+    /// range.
+    func setLayerPan(_ layerID: UInt8, pan: Float) {
+        editLayer(layerID) { $0.pan = min(max(pan, -1), 1) }
+    }
+
     func setLayerTranspose(_ layerID: UInt8, semitones: Int8) {
         editLayer(layerID) { $0.transpose = min(max(semitones, -24), 24) }
     }

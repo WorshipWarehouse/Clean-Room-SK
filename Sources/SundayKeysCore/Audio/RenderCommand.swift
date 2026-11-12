@@ -22,6 +22,11 @@ public struct RenderCommand: Equatable, Sendable {
 
         /// Trims the finished mix by a normalised pressure: 0 is neutral.
         case channelPressure = 6
+
+        /// Moves a layer between the speakers. `velocity` carries the
+        /// position, -1 fully left to 1 fully right, because the command is
+        /// a fixed-size slot and the field is free for this kind.
+        case setLayerPan = 7
     }
 
     public var kind: Kind

@@ -104,6 +104,11 @@ public final class RealtimeKeysoundEngine {
                 layer: layer.id,
                 note: UInt8(clamping: layer.instrumentRung)
             ))
+            enqueue(RenderCommand(
+                kind: .setLayerPan,
+                layer: layer.id,
+                velocity: layer.pan
+            ))
             index += 1
         }
 
@@ -190,11 +195,15 @@ public final class RealtimeKeysoundEngine {
 
     /// Render thread only. The stereo twin of `render`.
     ///
-    /// The voices are mono, so the instrument writes the left channel and that mix is
-    /// copied to the right before the chains run: stereo is made by the effects, and
-    /// giving both sides the same input is what lets the delay taps differ without
-    /// rendering the voices twice. The click is added afterwards from its own scratch,
-    /// so one cue reaches both channels and the metronome advances once per block.
+    /// The voices carry their layer's position, so the instrument fills both
+    /// channels itself: left and right are summed separately, each through
+    /// its side's per-layer gain, and a layer panned hard over reaches one
+    /// channel and not the other. A centred layer is unity on both sides, so
+    /// the two channels are identical for a patch that sets no position. The
+    /// chains then run per side, which is what lets the delay taps and the
+    /// reverb tails differ. The click is added afterwards from its own
+    /// scratch, so one cue reaches both channels and the metronome advances
+    /// once per block.
     public func renderStereo(
         intoLeft left: UnsafeMutableBufferPointer<Float>,
         intoRight right: UnsafeMutableBufferPointer<Float>,
@@ -211,13 +220,13 @@ public final class RealtimeKeysoundEngine {
             return
         }
 
-        instrument.render(into: left, frameCount: frames)
+        instrument.renderStereo(
+            intoLeft: left,
+            intoRight: right,
+            frameCount: frames
+        )
 
         var index = 0
-        while index < frames {
-            rightBase[index] = leftBase[index]
-            index += 1
-        }
 
         effects.process(into: left, frameCount: frames)
         effectsRight.process(into: right, frameCount: frames)
