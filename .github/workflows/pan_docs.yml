@@ -1,0 +1,28 @@
+name: pan-docs
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+env:
+  PAN_RUN: "43224621165"
+  PAN_JOB: "131204524837"
+  PAN_BUILD: "13:09:44-13:10:16"
+  PAN_TEST: "13:10:16-13:10:23"
+  PAN_STAGING: "1d8eff2f"
+  PAN_FEATURE: "d6273031"
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Drop the suite log the patch job committed
+        run: rm -f test.log
+      - name: Write the record and remove the temporary job
+        run: python3 tools/pan_docs.py
+      - name: Prepare the commit
+        run: git config user.email ci@example.com
+      - run: git config user.name "pan docs job"
+      - name: Commit
+        run: git add -A && git commit -m "Record the stereo position milestone"
+      - name: Push
+        run: git push origin HEAD:main
