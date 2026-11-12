@@ -16,6 +16,30 @@ jobs:
         run: python3 tools/tone_patch.py
       - name: Write the record and remove this job
         run: python3 tools/tone_docs.py
+      - name: Scan the generated sources
+        run: |
+          python3 - <<'PY'
+          import pathlib
+
+          bad = 0
+          paths = list(pathlib.Path("Sources").rglob("*.swift")) + list(pathlib.Path("Tests").rglob("*.swift"))
+          for path in paths:
+              text = path.read_text(encoding="utf-8", errors="replace")
+              cleaned = "".join(
+                  ch for ch in text if ch in "\n\t" or ord(ch) >= 32
+              )
+              if cleaned != text:
+                  for index, line in enumerate(text.splitlines(), 1):
+                      for ch in line:
+                          if ch not in "\n\t" and ord(ch) < 32:
+                              print(
+                                  "::error file=%s,line=%d::control character U+%04X removed"
+                                  % (path, index, ord(ch))
+                              )
+                              bad += 1
+                  path.write_text(cleaned, encoding="utf-8")
+          print("control characters removed: %d" % bad)
+          PY
       - name: Build with tests
         run: |
           swift build --build-tests > /tmp/build.log 2>&1
@@ -36,8 +60,7 @@ jobs:
           cp /tmp/build.log build.log 2>/dev/null || true
           cp /tmp/test.log test.log 2>/dev/null || true
           git checkout --orphan ci-diag
-          git rm -r --cached . -q || true
-          git add -f build.log test.log 2>/dev/null || true
+          git add -A
           git commit -m "diagnostic logs" || true
           git push -f origin ci-diag
           tail -n 30 build.log 2>/dev/null | sed -E 's/^/::error::/' || true
