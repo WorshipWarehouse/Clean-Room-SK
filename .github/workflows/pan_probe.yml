@@ -1,0 +1,14 @@
+name: pan-probe
+on:
+  workflow_dispatch:
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Apply the stereo position patch
+        run: python3 tools/pan_patch.py
+      - name: Move the switch brace the patch misplaced
+        run: python3 tools/pan_patch_fix.py
+      - name: Report the patched regions
+        run: python3 tools/pan_probe.py
