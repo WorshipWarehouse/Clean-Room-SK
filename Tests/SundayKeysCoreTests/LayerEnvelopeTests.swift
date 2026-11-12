@@ -10,6 +10,11 @@ import XCTest
 /// release test must not measure, and it puts a floor under a sustain ratio the envelope
 /// cannot shape. The engine's own test below therefore asserts voices, not levels.
 ///
+/// `renderStereo` adds into the caller's buffer, so every block here is cleared before it
+/// is rendered. Reusing an uncleared block would sum the previous ones and make the
+/// measured level a function of how long the note had been sounding rather than of its
+/// envelope.
+///
 /// The law, the clamp, the unset-envelope bit-identity and the attack position are kept
 /// as they were: they cover the real behaviour and none of them depends on effects.
 final class LayerEnvelopeTests: XCTestCase {
@@ -20,6 +25,14 @@ final class LayerEnvelopeTests: XCTestCase {
 
     private func layer(envelope: LayerEnvelope) -> KeyLayer {
         KeyLayer(id: 0, name: "Pad", range: NoteRange(0, 127), gain: 1, envelope: envelope)
+    }
+
+    private func clear(_ buffer: inout [Float]) {
+        var index = 0
+        while index < buffer.count {
+            buffer[index] = 0
+            index += 1
+        }
     }
 
     /// Renders one layer's envelope on the instrument itself, with no effect chain
@@ -60,6 +73,8 @@ final class LayerEnvelopeTests: XCTestCase {
                     )
                 )
             }
+            clear(&left)
+            clear(&right)
             left.withUnsafeMutableBufferPointer { leftBuffer in
                 right.withUnsafeMutableBufferPointer { rightBuffer in
                     instrument.renderStereo(
@@ -69,7 +84,6 @@ final class LayerEnvelopeTests: XCTestCase {
                     )
                 }
             }
-            // The instrument adds into the caller's buffer, so the block is the mix.
             out.append(contentsOf: left)
             index += 1
         }
@@ -238,6 +252,8 @@ final class LayerEnvelopeTests: XCTestCase {
         func renderBlocks(_ count: Int) {
             var index = 0
             while index < count {
+                clear(&left)
+                clear(&right)
                 left.withUnsafeMutableBufferPointer { leftBuffer in
                     right.withUnsafeMutableBufferPointer { rightBuffer in
                         instrument.renderStereo(
@@ -278,6 +294,8 @@ final class LayerEnvelopeTests: XCTestCase {
         func renderBlocks(_ count: Int) {
             var index = 0
             while index < count {
+                clear(&left)
+                clear(&right)
                 left.withUnsafeMutableBufferPointer { leftBuffer in
                     right.withUnsafeMutableBufferPointer { rightBuffer in
                         engine.renderStereo(
