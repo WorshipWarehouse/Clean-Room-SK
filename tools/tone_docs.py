@@ -71,8 +71,7 @@ as such, not as parity.
 - The filter is a topology-preserving state-variable low pass. The corner is pre-warped
   (`g = tan(pi * f / fs)`, held just under Nyquist), the damping `k` runs from 1.414 at no
   resonance - a Butterworth corner - to 0.1 at full resonance, and the whole thing is
-  reduced to three coefficients (`a1`, `a2`, `a3`) so the voice loop never divides per
-  sample.
+  reduced to three coefficients so the voice loop never divides per sample.
 - The slider is a position in octaves above 20 Hz (0 to 10), because a player hears tone
   in octaves; `octaves(fromCutoff:)` and `cutoff(fromOctaves:)` are the only conversion and
   both live in the law.
@@ -94,7 +93,8 @@ pan rungs, and `setLayerFilter(layer:cutoff:resonance:)` is the live-edit door.
 turned under a held chord changes the sound rather than cutting it. The layer editor shows
 a tone slider with a `tone open` / frequency readout and a resonance slider with its value.
 
-The bank is version 6. Version 5 banks load with an open filter.
+The bank is version 6, and `LayerPanTests` now asserts that. Version 5 banks load with an
+open filter.
 
 ## Evidence
 
@@ -127,7 +127,10 @@ The gate is now the median (under a quarter of the block), the 95th percentile (
 and a count of engaged blocks over half the budget (at most a twentieth, plus one), with a
 four-block ceiling on the single worst block to catch a genuine blow-up. The tail figures
 are printed as `RENDER_BUDGET_TAIL` so a passing run still records the distribution it
-judged.
+judged. On the tone branch that gate measured engaged median 949.2 us (8.9%), p95 1,337.5
+us (12.5%) and 0 blocks over half, with bypassed median 625.8 us and p95 1,625.8 us - and
+the worst blocks, 2,008.3 us engaged against 2,468.4 us dry, are again the host's, not the
+chain's.
 
 ## Not proven
 
@@ -187,6 +190,17 @@ tasks = read("docs/tasks.md")
 tasks = insert_before_last(tasks, "## How an item is closed", ENTRIES, "task list entry")
 write("docs/tasks.md", tasks)
 
+# ---------------------------------------------------------------- the bank version
+
+pan_tests = read("Tests/SundayKeysCoreTests/LayerPanTests.swift")
+pan_tests = one(
+    pan_tests,
+    "XCTAssertEqual(loaded.version, 5)",
+    "XCTAssertEqual(loaded.version, 6)",
+    "LayerPanTests bank version",
+)
+write("Tests/SundayKeysCoreTests/LayerPanTests.swift", pan_tests)
+
 # ---------------------------------------------------------------- heads
 
 HEADS_ROW = (
@@ -201,11 +215,17 @@ HEADS_ROW = (
     "| this commit | the per-layer tone (`LayerFilter`, `KeyLayer.filterCutoff` and "
     "`filterResonance`, the instrument's coefficient tables and bypass, `setLayerFilter` in "
     "the engine and the model, the layer editor's two sliders), `LayerFilterTests`, the "
-    "reworked `RenderBudgetTests` gate, `docs/re/layer-tone.md`, `docs/tasks.md`, "
-    "`docs/feature-inventory.md` and the two rows above, and the removal of this job's own "
-    "workflow and scripts | build, click, patch-transfer, session and budget are dispatched "
-    "against the commit that carries this row, because the job's repository token suppresses "
-    "push triggers |"
+    "reworked `RenderBudgetTests` gate, the bank version at 6 with `LayerPanTests` asserting "
+    "it, `docs/re/layer-tone.md`, `docs/tasks.md`, `docs/feature-inventory.md`, the two rows "
+    "above, and the removal of this job's own workflow and scripts | pushed with the job's "
+    "repository token, so no runs were started on this head; the suite that qualifies it is "
+    "in the dispatch job that pushed it, and the same tree ran build with tests, `swift test` "
+    "(423 cases) and the reworked gate green in job `131217597101` (run `43228430449`) apart "
+    "from the bank-version assertion this commit updates, where the gate measured engaged "
+    "median 949.2 us (8.9%), p95 1,337.5 us (12.5%), worst 2,008.3 us, and bypassed median "
+    "625.8 us, p95 1,625.8 us, worst 2,468.4 us with no block over half the budget. The "
+    "permanent workflows are dispatched against this commit afterwards, because the job's "
+    "token suppresses push triggers |"
 )
 
 heads = read("docs/re/heads.md")
