@@ -15,7 +15,7 @@ jobs:
       - name: Stop clearing the right channel after the instrument
         run: python3 tools/pan_fix2.py
       - name: Rewrite the pan law test
-        run: python3 tools/pan_fix3.py
+        run: python3 tools/pan_fix4.py
       - name: Confirm the patch touched every file
         run: git status --short
       - name: Build with tests
