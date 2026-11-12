@@ -12,6 +12,8 @@ jobs:
         run: python3 tools/pan_patch.py
       - name: Move the switch brace the patch misplaced
         run: python3 tools/pan_patch_fix.py
+      - name: Stop clearing the right channel after the instrument
+        run: python3 tools/pan_fix2.py
       - name: Confirm the patch touched every file
         run: git status --short
       - name: Build with tests
