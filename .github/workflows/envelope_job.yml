@@ -3,6 +3,9 @@ name: envelope job
 # The Mac is unreachable, so the change is applied, compiled and tested by a runner and
 # pushed only when the whole suite is green. The job removes itself and its scripts in the
 # same commit that lands the work, so the tree keeps only the permanent workflows.
+#
+# A step that fails prints its own log as annotations, because a runner's error message is
+# otherwise only inside the log archive.
 on:
   push:
     branches: [main]
@@ -33,9 +36,19 @@ jobs:
 
       - name: Apply the patch
         run: |
-          set -o pipefail
-          python3 tools/envelope_patch.py
-          python3 tools/envelope_ui.py
+          if ! python3 tools/envelope_patch.py > patch.log 2>&1; then
+            cat patch.log
+            while IFS= read -r line; do echo "::error title=patch::$line"; done < patch.log
+            exit 1
+          fi
+          cat patch.log
+          if ! python3 tools/envelope_ui.py > ui.log 2>&1; then
+            cat ui.log
+            while IFS= read -r line; do echo "::error title=ui::$line"; done < ui.log
+            exit 1
+          fi
+          cat ui.log
+          rm -f patch.log ui.log
 
       - name: Scan the generated files for control characters
         run: |
@@ -53,7 +66,9 @@ jobs:
                               bad.append(f"{path}:{number}: U+{ord(character):04X}")
           if bad:
               print("control characters found:")
-              print("\n".join(bad[:40]))
+              print("\n".join(bad[:20]))
+              for entry in bad[:20]:
+                  print(f"::error title=control::{entry}")
               sys.exit(1)
           print("no control characters in the generated Swift")
           PY
@@ -61,12 +76,24 @@ jobs:
       - name: Build with tests
         run: |
           set -o pipefail
-          swift build --build-tests
+          if ! swift build --build-tests > build.log 2>&1; then
+            tail -n 60 build.log
+            grep -E "error:" build.log | head -n 20 | while IFS= read -r line; do echo "::error title=build::$line"; done
+            exit 1
+          fi
+          tail -n 5 build.log
+          rm -f build.log
 
       - name: Test
         run: |
           set -o pipefail
-          swift test 2>&1 | tee test.log
+          if ! swift test > test.log 2>&1; then
+            grep -E "error:|failed" test.log | head -n 20 | while IFS= read -r line; do echo "::error title=test::$line"; done
+            tail -n 40 test.log
+            exit 1
+          fi
+          tail -n 8 test.log
+          rm -f test.log
 
       - name: Write the record
         run: |
@@ -76,7 +103,7 @@ jobs:
       - name: Commit and push
         run: |
           set -o pipefail
-          rm -f test.log
+          rm -f test.log build.log patch.log ui.log
           git config user.email ci@example.com
           git config user.name "envelope job"
           git rm -q .github/workflows/envelope_job.yml
