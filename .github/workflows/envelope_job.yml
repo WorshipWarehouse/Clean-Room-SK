@@ -1,0 +1,87 @@
+name: envelope job
+
+# The Mac is unreachable, so the change is applied, compiled and tested by a runner and
+# pushed only when the whole suite is green. The job removes itself and its scripts in the
+# same commit that lands the work, so the tree keeps only the permanent workflows.
+on:
+  push:
+    branches: [main]
+    paths:
+      - tools/envelope_patch.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: envelope-job
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Report the toolchain
+        run: |
+          set -o pipefail
+          swift --version
+
+      - name: Apply the patch
+        run: |
+          set -o pipefail
+          python3 tools/envelope_patch.py
+          python3 tools/envelope_ui.py
+
+      - name: Scan the generated files for control characters
+        run: |
+          set -o pipefail
+          python3 - <<'PY'
+          import pathlib
+          import sys
+
+          bad = []
+          for root in ("Sources", "Tests"):
+              for path in pathlib.Path(root).rglob("*.swift"):
+                  for number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+                      for character in line:
+                          if ord(character) < 32 and character != "\t":
+                              bad.append(f"{path}:{number}: U+{ord(character):04X}")
+          if bad:
+              print("control characters found:")
+              print("\n".join(bad[:40]))
+              sys.exit(1)
+          print("no control characters in the generated Swift")
+          PY
+
+      - name: Build with tests
+        run: |
+          set -o pipefail
+          swift build --build-tests
+
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log
+
+      - name: Write the record
+        run: |
+          set -o pipefail
+          python3 tools/envelope_docs.py
+
+      - name: Commit and push
+        run: |
+          set -o pipefail
+          rm -f test.log
+          git config user.email ci@example.com
+          git config user.name "envelope job"
+          git rm -q .github/workflows/envelope_job.yml
+          git rm -q tools/envelope_patch.py tools/envelope_ui.py tools/envelope_docs.py
+          git add -A
+          git status --short
+          git commit -m "Add per-layer envelope and prove the layer editor's controls"
+          git push origin HEAD:main
