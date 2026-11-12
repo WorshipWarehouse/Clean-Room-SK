@@ -1,5 +1,4 @@
 import pathlib
-import re
 import sys
 
 ROOT = pathlib.Path(".")
@@ -21,6 +20,36 @@ def one(text, old, new, label):
     return text.replace(old, new, 1)
 
 
+def insert_after_last(text, needle, addition, label):
+    index = text.rfind(needle)
+    if index < 0:
+        print(f"::error::{label}: no match of {needle!r}")
+        sys.exit(1)
+    end = text.find("\n", index)
+    if end < 0:
+        end = len(text)
+    return text[:end] + "\n" + addition + text[end:]
+
+
+def insert_before_last(text, needle, addition, label):
+    index = text.rfind(needle)
+    if index < 0:
+        print(f"::error::{label}: no match of {needle!r}")
+        sys.exit(1)
+    return text[:index] + addition + text[index:]
+
+
+def replace_last_line(text, needle, replacement, label):
+    index = text.rfind(needle)
+    if index < 0:
+        print(f"::error::{label}: no match of {needle!r}")
+        sys.exit(1)
+    end = text.find("\n", index)
+    if end < 0:
+        end = len(text)
+    return text[:index] + replacement + text[end:]
+
+
 NOTE = '''# Per-layer tone
 
 A layer now carries a low-pass corner and a resonance, the two fields the original's
@@ -34,19 +63,19 @@ as such, not as parity.
 `LayerFilter` (`Sources/SundayKeysCore/Audio/LayerFilter.swift`) owns everything:
 
 - The corner runs 20 Hz to 20 kHz, resonance 0 to 1, both clamped on read, on write into
-the layer, and again on decode, so a hand-edited bank cannot put the engine outside the
-law.
+  the layer, and again on decode, so a hand-edited bank cannot put the engine outside the
+  law.
 - A layer is **open** when the corner is at 20 kHz and resonance is zero. That is the
-default, which is why a bank written before the field existed decodes to an open filter
-and renders bit-identically to one this build wrote.
+  default, which is why a bank written before the field existed decodes to an open filter
+  and renders bit-identically to one this build wrote.
 - The filter is a topology-preserving state-variable low pass. The corner is pre-warped
-(`g = tan(pi * f / fs)`, held just under Nyquist), the damping `k` runs from 1.414 at no
-resonance - a Butterworth corner - to 0.1 at full resonance, and the whole thing is
-reduced to three coefficients (`a1`, `a2`, `a3`) so the voice loop never divides per
-sample.
+  (`g = tan(pi * f / fs)`, held just under Nyquist), the damping `k` runs from 1.414 at no
+  resonance - a Butterworth corner - to 0.1 at full resonance, and the whole thing is
+  reduced to three coefficients (`a1`, `a2`, `a3`) so the voice loop never divides per
+  sample.
 - The slider is a position in octaves above 20 Hz (0 to 10), because a player hears tone
-in octaves; `octaves(fromCutoff:)` and `cutoff(fromOctaves:)` are the only conversion and
-both live in the law.
+  in octaves; `octaves(fromCutoff:)` and `cutoff(fromOctaves:)` are the only conversion and
+  both live in the law.
 
 ## Where it runs
 
@@ -63,8 +92,7 @@ slot. `RealtimeKeysoundEngine.setPatch` publishes every layer's tone beside the 
 pan rungs, and `setLayerFilter(layer:cutoff:resonance:)` is the live-edit door.
 `AppModel.setLayerFilter` goes through `editLayer`, which is the no-release path, so a tone
 turned under a held chord changes the sound rather than cutting it. The layer editor shows
-a tone slider with a `tone open` / `tone 1.2k` / `tone 400 Hz` readout and a resonance
-slider with its value.
+a tone slider with a `tone open` / frequency readout and a resonance slider with its value.
 
 The bank is version 6. Version 5 banks load with an open filter.
 
@@ -75,17 +103,17 @@ frames per block:
 
 - a layer that never sets a tone is open, and `coefficients` reports the bypass;
 - the law clamps -5, 1e9 and NaN on the corner, -1 and 4 on resonance, and 1,280 Hz reads
-back as 6 octaves and 1,280 Hz again;
+  back as 6 octaves and 1,280 Hz again;
 - a patch built with the defaults renders sample-identical to one that states the open
-values explicitly (bit-identical, not close);
+  values explicitly (bit-identical, not close);
 - a 300 Hz corner takes a note at MIDI 96 (2,093 Hz) below half the dry RMS;
 - a 1.5 kHz corner leaves a note at MIDI 48 (131 Hz) above 60% of its dry RMS;
 - full resonance at 1,046 Hz puts back more than 1.2x the energy the same corner passes at
-no resonance;
+  no resonance;
 - a tone moved under a held note - through `setPatch(releasingVoices: false)` and through
-`setLayerFilter` - keeps `voiceCount` and makes the held note darker;
+  `setLayerFilter` - keeps `voiceCount` and makes the held note darker;
 - a bank round trip keeps the tone, a version 5 bank with the keys removed decodes open,
-and a decoded corner of 900,000 Hz clamps to 20 kHz.
+  and a decoded corner of 900,000 Hz clamps to 20 kHz.
 
 ## The render budget gate, reworked
 
@@ -121,10 +149,9 @@ inv = one(
     "version 6 (`docs/re/layer-tone.md`) | O name, built |",
     "inventory filter row",
 )
-inv = one(
+inv = insert_after_last(
     inv,
     "are Observed names only | U, unchanged |",
-    "are Observed names only | U, unchanged |\n"
     "| per-layer tone | `LayerFilter`'s state-variable law over `KeyLayer.filterCutoff` / "
     "`filterResonance`, three baked coefficients per layer, a bypass flag in the voice loop, "
     "and the live `setLayerFilter` command | this build's own |",
@@ -134,10 +161,7 @@ write("docs/feature-inventory.md", inv)
 
 # ---------------------------------------------------------------- task list
 
-tasks = read("docs/tasks.md")
-tasks = one(
-    tasks,
-    "## How an item is closed",
+ENTRIES = (
     "- [x] **Per-layer tone.** `KeyLayer.filterCutoff` (20 Hz to 20 kHz) and\n"
     "      `filterResonance` (0 to 1), clamped on write, on decode and again in the law, with\n"
     "      bank version 6 defaulting an older patch to a wide-open filter. `LayerFilter` owns\n"
@@ -157,42 +181,35 @@ tasks = one(
     "      60%) and a count of blocks over half the budget (at most a twentieth, plus one), with a\n"
     "      four-block ceiling on the single worst block so a real blow-up still fails. The tail is\n"
     "      printed as `RENDER_BUDGET_TAIL` on a pass as well as a failure.\n"
-    "\n"
-    "## How an item is closed",
-    "task list entry",
 )
+
+tasks = read("docs/tasks.md")
+tasks = insert_before_last(tasks, "## How an item is closed", ENTRIES, "task list entry")
 write("docs/tasks.md", tasks)
 
 # ---------------------------------------------------------------- heads
 
-heads = read("docs/re/heads.md")
-heads = one(
-    heads,
-    "| this commit |",
-    "| `017ec379` |",
-    "heads rename current row",
-)
-heads = one(
-    heads,
-    "| `017ec379` | `docs/tasks.md` with the live-path item ticked, `docs/re/effects-panel-view-path.md`, and the two rows above | build, click, patch-transfer and session on the push; `concurrency` when the build for this commit completes; `budget` is skipped, because no `Sources`, `Tests` or `Package.swift` file changed |",
+HEADS_ROW = (
     "| `017ec379` | `docs/tasks.md` with the live-path item ticked, "
     "`docs/re/effects-panel-view-path.md`, and the two rows above | build, click, "
     "patch-transfer and session were dispatched against this head and all four are terminal "
-    "success; `budget` was dispatched against it too (run `43225846015`, 13:17:19-13:18:00) "
-    "and passed, reporting engaged median 958.3 us of a 10,667 us block (9.0%) with a 7,017.5 "
-    "us worst block (65.8%), and bypassed median 636.2 us (6.0%) with a 2,244.9 us worst "
-    "(21.0%), the chain 1.5x the dry path. That spread - the dry path's worst block three and "
-    "a half times its own median - is what moved the budget gate below |\n"
+    "success; `budget` was dispatched against it too (run `43225846015`) and passed, "
+    "reporting engaged median 958.3 us of a 10,667 us block (9.0%) with a 7,017.5 us worst "
+    "block (65.8%), and bypassed median 636.2 us (6.0%) with a 2,244.9 us worst (21.0%), "
+    "the chain 1.5x the dry path. That spread - the dry path's worst block three and a half "
+    "times its own median - is what moved the budget gate below |\n"
     "| this commit | the per-layer tone (`LayerFilter`, `KeyLayer.filterCutoff` and "
-    "`filterResonance`, the instrument's coefficient tables and bypass, `setLayerFilter` in the "
-    "engine and the model, the layer editor's two sliders), `LayerFilterTests`, the reworked "
-    "`RenderBudgetTests` gate, `docs/re/layer-tone.md`, `docs/tasks.md`, "
+    "`filterResonance`, the instrument's coefficient tables and bypass, `setLayerFilter` in "
+    "the engine and the model, the layer editor's two sliders), `LayerFilterTests`, the "
+    "reworked `RenderBudgetTests` gate, `docs/re/layer-tone.md`, `docs/tasks.md`, "
     "`docs/feature-inventory.md` and the two rows above, and the removal of this job's own "
     "workflow and scripts | build, click, patch-transfer, session and budget are dispatched "
     "against the commit that carries this row, because the job's repository token suppresses "
-    "push triggers |",
-    "heads row rewrite",
+    "push triggers |"
 )
+
+heads = read("docs/re/heads.md")
+heads = replace_last_line(heads, "| this commit |", HEADS_ROW, "heads rows")
 write("docs/re/heads.md", heads)
 
 # ---------------------------------------------------------------- cleanup
