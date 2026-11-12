@@ -1,0 +1,40 @@
+name: tone-patch
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: tone-patch
+  cancel-in-progress: false
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Apply the tone patch
+        run: python3 tools/tone_patch.py
+      - name: Write the record and remove this job
+        run: python3 tools/tone_docs.py
+      - name: Build with tests
+        run: |
+          set -o pipefail
+          swift build --build-tests > /tmp/build.log 2>&1
+          status=$?
+          { grep -E "error:" /tmp/build.log | head -n 120 | sed -E 's/^/::error::/' || true; }
+          exit $status
+      - name: Test
+        run: |
+          set -o pipefail
+          swift test > /tmp/test.log 2>&1
+          status=$?
+          { grep -E "error:|XCTAssert|failed" /tmp/test.log | head -n 120 | sed -E 's/^/::error::/' || true; }
+          exit $status
+      - name: Commit
+        run: |
+          git config user.email ci@example.com
+          git config user.name "tone patch job"
+          git add -A
+          git commit -m "Add per-layer tone and rework the render budget gate"
+      - name: Push
+        run: git push origin HEAD:main
