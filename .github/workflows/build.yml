@@ -62,17 +62,31 @@ jobs:
       # The verbose test log is far bigger than a downloaded job log keeps, so the
       # suite totals are republished as step annotations, which the checks API
       # returns in full: the counts stay readable even when the log is truncated.
+      # Each kind of line gets its own label: aggregate is the whole-run XCTest
+      # summary, suite is every per-suite summary, skipped is any skip report and
+      # swift-testing is the Swift Testing runner summary.
       - name: Report test totals
         if: always()
         run: |
           set -o pipefail
+          log=/tmp/test.log
           echo "=== TEST SUMMARY BEGIN ==="
-          { grep -hE "Executed [0-9]+ tests?, with" /tmp/test.log || true; } | tail -n 5
-          { grep -hE "Test run with [0-9]+ tests?" /tmp/test.log || true; } | tail -n 5
-          { grep -hE "tests? skipped|Skipped [0-9]+ tests?" /tmp/test.log || true; } | tail -n 5
+          { grep -hE "Executed [0-9]+ tests?, with" "$log" || true; } | tail -n 1
+          { grep -hE "Executed [0-9]+ tests?, with" "$log" || true; } | wc -l | tr -d ' '
+          { grep -hE "Test run with [0-9]+ tests?" "$log" || true; }
+          { grep -hE "tests? skipped|Skipped [0-9]+ tests?" "$log" || true; }
           echo "=== TEST SUMMARY END ==="
-          { grep -hE "Executed [0-9]+ tests?, with|Test run with [0-9]+ tests?|tests? skipped|Skipped [0-9]+ tests?" /tmp/test.log || true; } | tail -n 15 | while IFS= read -r line; do
-            echo "::notice::totals: $line"
+          { grep -hE "Executed [0-9]+ tests?, with" "$log" || true; } | tail -n 1 | while IFS= read -r line; do
+            echo "::notice::totals: aggregate$line"
+          done
+          { grep -hE "Executed [0-9]+ tests?, with" "$log" || true; } | while IFS= read -r line; do
+            echo "::notice::totals: suite$line"
+          done
+          { grep -hE "Test run with [0-9]+ tests?" "$log" || true; } | while IFS= read -r line; do
+            echo "::notice::totals: swift-testing $line"
+          done
+          { grep -hE "tests? skipped|Skipped [0-9]+ tests?" "$log" || true; } | while IFS= read -r line; do
+            echo "::notice::totals: skipped $line"
           done
 
       - name: Report test diagnostics
