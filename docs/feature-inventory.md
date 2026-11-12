@@ -40,7 +40,7 @@ Key to status: **O** observed name or field in metadata or strings, **I** inferr
 | ten sound slots per snapshot | `PatchSnapshotValuesApi` sound0 to sound9 | O |
 | per sound key range and transpose | `layerRange`, `midiTranspose` | O fields, U semantics |
 | sustain and pedal filtering | `blockSustain`, `pedalNotes` | O names, U behaviour |
-| stereo position | `stereoPan`, `StereoPanApi` | O |
+| stereo position | `stereoPan`, `StereoPanApi`; built here as `KeyLayer.pan` with one `panGains(for:)` balance law, banked at version 5, rendered per layer in both channels (`docs/re/stereo-position.md`) | O name, built |
 | per sound gain range | `volumeRange`, `samplerVolume`, `volume` | O |
 | snapshot layout modes | `SoundsOptionsLayoutApi` effect, note | O |
 

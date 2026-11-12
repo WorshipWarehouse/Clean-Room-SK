@@ -121,6 +121,8 @@ or a window this environment does not have. The next pass should start from the 
   session contents remain Unknown** (`docs/feature-inventory.md`, Known limits), so no parity is
   claimed for them.
 
+- [x] **Per-layer stereo position.** `KeyLayer.pan` in -1 to 1, clamped and decoded tolerantly, with bank version 5 defaulting older patches to centre. One `panGains(for:)` balance law keeps centre at unity on both sides. `setLayerPan` rides the live-edit path beside the instrument rung, so a pan moved under a held chord moves without cutting it. The instrument keeps a left and a right gain table per layer and renders both channels in one parameterised voice loop, with the mono path documented as ignoring pan. `AppModel.setLayerPan`, and a pan slider with an L/R/C readout in the layer editor. Six core cases and the model case pass in dispatch job `131204524837`; the record is `docs/re/stereo-position.md`.
+
 ## How an item is closed
 A box is ticked only when the change is on `main` and the workflows for that head are terminal green:
 build with its `Test` step, plus click, patch-transfer, session and concurrency. `concurrency` starts
