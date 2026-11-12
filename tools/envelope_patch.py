@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """Apply the per-layer envelope patch to the existing sources, tests and record.
 
-Anchors are matched on stripped line content, never on indentation or on a whole
+Anchors are matched on stripped line content, never on indentation or on whole
 ranges of text, because the files were written by hand over many passes. Every
-anchor is required to match exactly once unless it names an occurrence, so a
-renamed or moved line fails the job instead of leaving a half-applied patch.
+anchor is required to match unless it names an occurrence, so a renamed or moved
+line fails the job instead of leaving a half-applied patch.
+
+The two release bodies are rewritten as whole regions. They are the only place a
+voice's release length is chosen, so a single-line match would leave one path on
+the instrument's own ramp, and a second match of the same line cannot exist after
+the first rewrite has consumed it.
 """
 
 import pathlib
@@ -196,6 +201,7 @@ lines = insert_before(lines, "private func publishFilter(for slot: Int, cutoff: 
     "    }",
     "",
 ], path)
+
 # The attack's end now chooses between a decay stage and a straight hold.
 lines = replace_line(lines, "voice.stage = .sustain", [
     "                        if voice.sustainLevel < voice.peak && voice.decayStep > 0 {",
@@ -227,31 +233,70 @@ lines = replace_line(lines, "voice.attackStep = peak / attackFrames", [
     "            voice.decayStep = 0",
     "        }",
 ], path)
-lines = replace_line(
+
+# ---------------------------------------------------------------- the two releases
+
+# A voice released while it is decaying is released here, not left sounding until the
+# decay ends, so both gates accept .decay. Each body reads its own layer's release
+# frames at the moment of release, which is how a release time edited under a held
+# chord reaches the note.
+RELEASE_ONE = [
+    "    private func release(note: UInt8, layer: UInt8) {",
+    "        var index = 0",
+    "        while index < voices.count {",
+    "            var voice = voices[index]",
+    "            let sounding = voice.stage == .attack",
+    "                || voice.stage == .decay",
+    "                || voice.stage == .sustain",
+    "            if sounding, voice.layer == layer, voice.note == note {",
+    "                voice.stage = .release",
+    "                voice.releaseStep = max(",
+    "                    voice.level / max(layerReleaseFrames[Int(voice.layer) & 0x7F], 1),",
+    "                    1e-7",
+    "                )",
+    "                voices[index] = voice",
+    "            }",
+    "            index += 1",
+    "        }",
+    "    }",
+    "",
+]
+
+RELEASE_ALL = [
+    "    private func releaseEverything() {",
+    "        var index = 0",
+    "        while index < voices.count {",
+    "            var voice = voices[index]",
+    "            let sounding = voice.stage == .attack",
+    "                || voice.stage == .decay",
+    "                || voice.stage == .sustain",
+    "            if sounding {",
+    "                voice.stage = .release",
+    "                voice.releaseStep = max(",
+    "                    voice.level / max(layerReleaseFrames[Int(voice.layer) & 0x7F], 1),",
+    "                    1e-7",
+    "                )",
+    "                voices[index] = voice",
+    "            }",
+    "            index += 1",
+    "        }",
+    "    }",
+    "",
+]
+
+lines = replace_region(
     lines,
-    "voice.releaseStep = max(voice.level / releaseFrames, 1e-7)",
-    [
-        "                let releaseSlot = Int(layer) & 0x7F",
-        "                voice.releaseStep = max(",
-        "                    voice.level / max(layerReleaseFrames[releaseSlot], 1),",
-        "                    1e-7",
-        "                )",
-    ],
+    "private func release(note: UInt8, layer: UInt8) {",
+    "private func releaseEverything() {",
+    RELEASE_ONE,
     path,
-    occurrence=1,
 )
-lines = replace_line(
+lines = replace_region(
     lines,
-    "voice.releaseStep = max(voice.level / releaseFrames, 1e-7)",
-    [
-        "                let releaseSlot = Int(voice.layer) & 0x7F",
-        "                voice.releaseStep = max(",
-        "                    voice.level / max(layerReleaseFrames[releaseSlot], 1),",
-        "                    1e-7",
-        "                )",
-    ],
+    "private func releaseEverything() {",
+    "/// Render thread only. A bend of -1 to 1 is clamped and turned into a",
+    RELEASE_ALL,
     path,
-    occurrence=2,
 )
 write(path, lines)
 
