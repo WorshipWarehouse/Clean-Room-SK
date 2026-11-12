@@ -17,7 +17,7 @@ jobs:
       - name: Build with tests
         run: swift build --build-tests
       - name: Test
-        run: swift test
+        run: 'set -o pipefail; swift test 2>&1 | tee test.log | grep -E "error:|failed \(" | head -40 | sed "s/^/::error::/"'
       - name: Prepare the commit
         run: git config user.email ci@example.com
       - run: git config user.name "pan patch job"
