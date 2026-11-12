@@ -32,6 +32,17 @@ have to reconstruct it from the run list.
 | `017ec379` | `docs/tasks.md` with the live-path item ticked, `docs/re/effects-panel-view-path.md`, and the two rows above | build, click, patch-transfer and session were dispatched against this head and all four are terminal success; `budget` was dispatched against it too (run `43225846015`) and passed, reporting engaged median 958.3 us of a 10,667 us block (9.0%) with a 7,017.5 us worst block (65.8%), and bypassed median 636.2 us (6.0%) with a 2,244.9 us worst (21.0%), the chain 1.5x the dry path. That spread - the dry path's worst block three and a half times its own median - is what moved the budget gate below |
 | this commit | the per-layer tone (`LayerFilter`, `KeyLayer.filterCutoff` and `filterResonance`, the instrument's coefficient tables and bypass, `setLayerFilter` in the engine and the model, the layer editor's two sliders), `LayerFilterTests`, the reworked `RenderBudgetTests` gate, the bank version at 6 with `LayerPanTests` asserting it, `docs/re/layer-tone.md`, `docs/tasks.md`, `docs/feature-inventory.md`, the two rows above, and the removal of this job's own workflow and scripts | pushed with the job's repository token, so no runs were started on this head; the suite that qualifies it is in the dispatch job that pushed it, and the same tree ran build with tests, `swift test` (423 cases) and the reworked gate green in job `131217597101` (run `43228430449`) apart from the bank-version assertion this commit updates, where the gate measured engaged median 949.2 us (8.9%), p95 1,337.5 us (12.5%), worst 2,008.3 us, and bypassed median 625.8 us, p95 1,625.8 us, worst 2,468.4 us with no block over half the budget. The permanent workflows are dispatched against this commit afterwards, because the job's token suppresses push triggers |
 
+| this commit | the per-layer envelope (`LayerEnvelope`, `KeyLayer.envelope`, the
+  instrument's four tables and decay stage, `setLayerAttackDecay` and
+  `setLayerSustainRelease`, `RealtimeKeysoundEngine.setLayerEnvelope`,
+  `AppModel.setLayerEnvelope`), `LayerSlider` and the rewritten layer row, the bank version
+  at 7 with `LayerPanTests` asserting it, `LayerEnvelopeTests`, `LayerRowViewTests`,
+  `docs/re/layer-envelope.md`, `docs/tasks.md`, `docs/feature-inventory.md` and the removal
+  of this job's own workflow and scripts | pushed with the job's repository token, so no
+  runs were started on this head; the suite that qualifies it is in the dispatch job that
+  pushed it, and the permanent workflows are dispatched against this commit afterwards
+  because the job's token suppresses push triggers |
+
 ## What the runs prove
 - The code compiles in debug with tests, the whole suite passes on a `macos-15` runner, the release
 build and the bundle succeed, the app launches, and the audio, MIDI and licence-session probes return

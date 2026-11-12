@@ -36,6 +36,10 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
     /// it did before the field existed.
     public var filterCutoff: Float
     public var filterResonance: Float
+    /// The envelope this layer's voices are shaped by. `LayerEnvelope` states the law
+    /// and its defaults are the instrument's own original ramp, so a bank written
+    /// before the field existed sounds exactly as it did then.
+    public var envelope: LayerEnvelope
 
     /// Whether the layer's filter does nothing, which is the render path's own
     /// bypass condition.
@@ -55,6 +59,7 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         pan: Float = 0,
         filterCutoff: Float = LayerFilter.defaultCutoff,
         filterResonance: Float = LayerFilter.defaultResonance,
+        envelope: LayerEnvelope = .default,
         timbre: Timbre = .keys,
         instrument: String? = nil,
         enabled: Bool = true
@@ -67,6 +72,7 @@ public struct KeyLayer: Identifiable, Equatable, Sendable {
         self.pan = min(max(pan, -1), 1)
         self.filterCutoff = LayerFilter.clampCutoff(filterCutoff)
         self.filterResonance = LayerFilter.clampResonance(filterResonance)
+        self.envelope = envelope
         self.instrument = instrument ?? timbre.rawValue
         self.enabled = enabled
     }
@@ -127,6 +133,7 @@ extension KeyLayer: Codable {
         case pan
         case filterCutoff
         case filterResonance
+        case envelope
         case timbre
         case instrument
         case enabled
@@ -151,6 +158,8 @@ extension KeyLayer: Codable {
         )
         let legacy = try container.decodeIfPresent(Timbre.self, forKey: .timbre) ?? .keys
         instrument = try container.decodeIfPresent(String.self, forKey: .instrument) ?? legacy.rawValue
+        envelope = try container.decodeIfPresent(LayerEnvelope.self, forKey: .envelope)
+            ?? .default
         enabled = try container.decodeIfPresent(Bool.self, forKey: .enabled) ?? true
     }
 
@@ -165,6 +174,7 @@ extension KeyLayer: Codable {
         try container.encode(filterCutoff, forKey: .filterCutoff)
         try container.encode(filterResonance, forKey: .filterResonance)
         try container.encode(instrument, forKey: .instrument)
+        try container.encode(envelope, forKey: .envelope)
         try container.encode(timbre, forKey: .timbre)
         try container.encode(enabled, forKey: .enabled)
     }

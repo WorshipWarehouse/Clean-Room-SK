@@ -33,6 +33,16 @@ public struct RenderCommand: Equatable, Sendable {
         /// resonance from 0 to 1, because one float payload is not enough for
         /// both and the command is a fixed-size slot.
         case setLayerFilter = 8
+
+        /// Sets a layer's attack and decay, in seconds. `velocity` carries the attack
+        /// and `amount` the decay, because one float is not enough for both and the
+        /// command is a fixed-size slot. Split from the sustain and release below so
+        /// neither command needs a field the struct does not have.
+        case setLayerAttackDecay = 9
+
+        /// Sets a layer's sustain level (0 to 1, in `velocity`) and its release time in
+        /// seconds (`amount`).
+        case setLayerSustainRelease = 10
     }
 
     public var kind: Kind

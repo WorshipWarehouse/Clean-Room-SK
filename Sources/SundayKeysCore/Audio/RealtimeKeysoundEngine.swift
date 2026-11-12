@@ -93,6 +93,26 @@ public final class RealtimeKeysoundEngine {
     public func setPatch(_ newPatch: Patch, releasingVoices: Bool = true) {
         patch = newPatch
         router = LayerRouter(layers: newPatch.layers)
+
+        // The envelope travels as two commands per layer for the reason the filter's
+        // does: the ring's slot is fixed size and a stage is one float.
+        var envelopeIndex = 0
+        while envelopeIndex < newPatch.layers.count {
+            let layer = newPatch.layers[envelopeIndex]
+            enqueue(RenderCommand(
+                kind: .setLayerAttackDecay,
+                layer: layer.id,
+                velocity: layer.envelope.attack,
+                amount: layer.envelope.decay
+            ))
+            enqueue(RenderCommand(
+                kind: .setLayerSustainRelease,
+                layer: layer.id,
+                velocity: layer.envelope.sustain,
+                amount: layer.envelope.release
+            ))
+            envelopeIndex += 1
+        }
         effects.apply(settings: newPatch.effects)
         effectsRight.apply(settings: newPatch.effects)
 
@@ -134,6 +154,30 @@ public final class RealtimeKeysoundEngine {
             layer: layer,
             velocity: cutoff,
             amount: resonance
+        ))
+    }
+
+    /// Producer side. Publishes one layer's envelope on the ring the other live-edit
+    /// commands use, so an envelope moved under a held chord shapes the notes that
+    /// follow it without cutting the chord already sounding.
+    public func setLayerEnvelope(layer: UInt8, envelope: LayerEnvelope) {
+        let shaped = LayerEnvelope(
+            attack: envelope.attack,
+            decay: envelope.decay,
+            sustain: envelope.sustain,
+            release: envelope.release
+        )
+        enqueue(RenderCommand(
+            kind: .setLayerAttackDecay,
+            layer: layer,
+            velocity: shaped.attack,
+            amount: shaped.decay
+        ))
+        enqueue(RenderCommand(
+            kind: .setLayerSustainRelease,
+            layer: layer,
+            velocity: shaped.sustain,
+            amount: shaped.release
         ))
     }
 

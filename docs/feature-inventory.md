@@ -19,7 +19,9 @@ Key to status: **O** observed name or field in metadata or strings, **I** inferr
 | multi output routing | `ExclusiveMultiOutMixer`, `MultiOutMixer`, `MultiOutBackfill`, `OutputDeviceMapping` | O |
 | routing mode | `RoutingTypeApi` mono, stereo, bus; `RoutingTypeBus/Channel`; `audioOutput` | O |
 | polyphony cap | `voiceCount` on sound and sampler | O |
-| envelope | `ADSRModel`, attack, decay, sustain, release, plus fade | O |
+| envelope | `ADSRModel` attack, decay, sustain, release, plus fade; built here as
+`KeyLayer.envelope` with one `LayerEnvelope` law, banked at version 7
+(`docs/re/layer-envelope.md`) | O names, built |
 | filter | `ModulationFilterApi` filterRange, resonance; built here as `KeyLayer.filterCutoff` and `filterResonance` with one `LayerFilter` law, banked at version 6 (`docs/re/layer-tone.md`) | O name, built |
 
 ## Instruments
@@ -144,3 +146,8 @@ an **Unknown** row above.
 | sample libraries | none shipped: the original's content is licensed and was not copied, so every voice is synthesised | U, unchanged |
 | AUv3 external plugins | not implemented: `ExternalPlugin` and `ExternalPluginApi` are Observed names only | U, unchanged |
 | per-layer tone | `LayerFilter`'s state-variable law over `KeyLayer.filterCutoff` / `filterResonance`, three baked coefficients per layer, a bypass flag in the voice loop, and the live `setLayerFilter` command | this build's own |
+
+
+| per-layer envelope | `LayerEnvelope`'s attack/decay/sustain/release law over
+`KeyLayer.envelope`, four per-layer tables and one decay stage in the voice loop, the two
+stage commands, and the live `setLayerEnvelope` path | this build's own |

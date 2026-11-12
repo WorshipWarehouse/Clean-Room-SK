@@ -29,6 +29,7 @@ public final class PolyphonicInstrument {
         case attack
         case sustain
         case release
+        case decay
         case stealing
     }
 
@@ -52,6 +53,8 @@ public final class PolyphonicInstrument {
         var pending = Pending()
         var age: UInt64 = 0
         var filter = LayerFilter.State()
+        var sustainLevel: Float = 0
+        var decayStep: Float = 0
     }
 
     public let sampleRate: Double
@@ -83,6 +86,14 @@ public final class PolyphonicInstrument {
     private let layerFilterA2: UnsafeMutablePointer<Float>
     private let layerFilterA3: UnsafeMutablePointer<Float>
     private let layerFilterBypass: UnsafeMutablePointer<UInt8>
+    /// Per-layer envelope as frames and a level, so the voice loop never converts a
+    /// time. A decay of zero frames with a sustain of one is the fast path: no decay
+    /// stage at all, which is what a bank written before the envelope existed sounds
+    /// like.
+    private let layerAttackFrames: UnsafeMutablePointer<Float>
+    private let layerDecayFrames: UnsafeMutablePointer<Float>
+    private let layerSustainLevel: UnsafeMutablePointer<Float>
+    private let layerReleaseFrames: UnsafeMutablePointer<Float>
 
     private let voiceCounter: UnsafeMutablePointer<UInt64>
 
@@ -175,6 +186,19 @@ public final class PolyphonicInstrument {
         // Starting from bypass means a layer this patch never sets renders
         // exactly as it did before the field existed.
         layerFilterBypass.initialize(repeating: 1, count: 128)
+        layerAttackFrames = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerDecayFrames = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerSustainLevel = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        layerReleaseFrames = UnsafeMutablePointer<Float>.allocate(capacity: 128)
+        // The instrument's own ramp is the default, so an untouched layer renders as
+        // it did before this table existed.
+        layerAttackFrames.initialize(repeating: attackFrames, count: 128)
+        layerDecayFrames.initialize(repeating: 0, count: 128)
+        layerSustainLevel.initialize(repeating: 1, count: 128)
+        layerReleaseFrames.initialize(repeating: releaseFrames, count: 128)
+        for layer in layers {
+            publishEnvelope(for: Int(layer.id) & 0x7F, envelope: layer.envelope)
+        }
         for layer in layers {
             publishFilter(
                 for: Int(layer.id) & 0x7F,
@@ -204,6 +228,14 @@ public final class PolyphonicInstrument {
         layerFilterA3.deallocate()
         layerFilterBypass.deinitialize(count: 128)
         layerFilterBypass.deallocate()
+        layerAttackFrames.deinitialize(count: 128)
+        layerAttackFrames.deallocate()
+        layerDecayFrames.deinitialize(count: 128)
+        layerDecayFrames.deallocate()
+        layerSustainLevel.deinitialize(count: 128)
+        layerSustainLevel.deallocate()
+        layerReleaseFrames.deinitialize(count: 128)
+        layerReleaseFrames.deallocate()
         voiceCounter.deallocate()
     }
 
@@ -237,6 +269,24 @@ public final class PolyphonicInstrument {
             let gains = KeyLayer.panGains(for: command.velocity)
             layerPanLeft[Int(command.layer) & 0x7F] = gains.left
             layerPanRight[Int(command.layer) & 0x7F] = gains.right
+        case .setLayerAttackDecay:
+            let attackSlot = Int(command.layer) & 0x7F
+            layerAttackFrames[attackSlot] = LayerEnvelope.frames(
+                for: command.velocity,
+                sampleRate: sampleRate
+            )
+            layerDecayFrames[attackSlot] = command.amount > 0
+                ? LayerEnvelope.frames(for: command.amount, sampleRate: sampleRate)
+                : 0
+        case .setLayerSustainRelease:
+            let tailSlot = Int(command.layer) & 0x7F
+            layerSustainLevel[tailSlot] = command.velocity.isFinite
+                ? min(max(command.velocity, 0), 1)
+                : 1
+            layerReleaseFrames[tailSlot] = LayerEnvelope.frames(
+                for: command.amount,
+                sampleRate: sampleRate
+            )
         case .setLayerFilter:
             // `velocity` is the corner in hertz, `amount` the resonance.
             publishFilter(
@@ -319,6 +369,20 @@ public final class PolyphonicInstrument {
                     voice.level += voice.attackStep
                     if voice.level >= voice.peak {
                         voice.level = voice.peak
+                        if voice.sustainLevel < voice.peak && voice.decayStep > 0 {
+                            voice.stage = .decay
+                        } else {
+                            if voice.sustainLevel < voice.peak {
+                                voice.level = voice.sustainLevel
+                            }
+                            voice.stage = .sustain
+                        }
+                    }
+
+                case .decay:
+                    voice.level -= voice.decayStep
+                    if voice.level <= voice.sustainLevel {
+                        voice.level = voice.sustainLevel
                         voice.stage = .sustain
                     }
 
@@ -483,7 +547,15 @@ public final class PolyphonicInstrument {
         voice.increment = Self.increment(for: note, sampleRate: sampleRate)
         voice.level = 0
         voice.peak = peak
-        voice.attackStep = peak / attackFrames
+        let envelopeSlot = Int(layer) & 0x7F
+        voice.attackStep = peak / max(layerAttackFrames[envelopeSlot], 1)
+        voice.sustainLevel = peak * layerSustainLevel[envelopeSlot]
+        let decayFrames = layerDecayFrames[envelopeSlot]
+        if decayFrames >= 1 && voice.sustainLevel < peak {
+            voice.decayStep = (peak - voice.sustainLevel) / decayFrames
+        } else {
+            voice.decayStep = 0
+        }
         voice.releaseStep = 0
         voice.pending = Pending()
         voice.filter = LayerFilter.State()
@@ -512,10 +584,15 @@ public final class PolyphonicInstrument {
         var index = 0
         while index < voices.count {
             var voice = voices[index]
-            if voice.stage == .attack || voice.stage == .sustain,
-               voice.layer == layer, voice.note == note {
+            let sounding = voice.stage == .attack
+                || voice.stage == .decay
+                || voice.stage == .sustain
+            if sounding, voice.layer == layer, voice.note == note {
                 voice.stage = .release
-                voice.releaseStep = max(voice.level / releaseFrames, 1e-7)
+                voice.releaseStep = max(
+                    voice.level / max(layerReleaseFrames[Int(voice.layer) & 0x7F], 1),
+                    1e-7
+                )
                 voices[index] = voice
             }
             index += 1
@@ -526,9 +603,15 @@ public final class PolyphonicInstrument {
         var index = 0
         while index < voices.count {
             var voice = voices[index]
-            if voice.stage == .attack || voice.stage == .sustain {
+            let sounding = voice.stage == .attack
+                || voice.stage == .decay
+                || voice.stage == .sustain
+            if sounding {
                 voice.stage = .release
-                voice.releaseStep = max(voice.level / releaseFrames, 1e-7)
+                voice.releaseStep = max(
+                    voice.level / max(layerReleaseFrames[Int(voice.layer) & 0x7F], 1),
+                    1e-7
+                )
                 voices[index] = voice
             }
             index += 1
@@ -553,6 +636,24 @@ public final class PolyphonicInstrument {
     /// Render thread only. Writes one layer's filter coefficients, or the bypass
     /// flag when the corner is wide open. `tan` is evaluated here, once per
     /// command, never per sample.
+    /// Render thread only. Writes one layer's envelope, converting the times to frames
+    /// here rather than in the voice loop and re-clamping through the law, so a command
+    /// cannot put the loop outside its range.
+    private func publishEnvelope(for slot: Int, envelope: LayerEnvelope) {
+        let shaped = LayerEnvelope(
+            attack: envelope.attack,
+            decay: envelope.decay,
+            sustain: envelope.sustain,
+            release: envelope.release
+        )
+        layerAttackFrames[slot] = LayerEnvelope.frames(for: shaped.attack, sampleRate: sampleRate)
+        layerDecayFrames[slot] = shaped.decay > 0
+            ? LayerEnvelope.frames(for: shaped.decay, sampleRate: sampleRate)
+            : 0
+        layerSustainLevel[slot] = shaped.sustain
+        layerReleaseFrames[slot] = LayerEnvelope.frames(for: shaped.release, sampleRate: sampleRate)
+    }
+
     private func publishFilter(for slot: Int, cutoff: Float, resonance: Float) {
         let coefficients = LayerFilter.coefficients(
             cutoff: cutoff,

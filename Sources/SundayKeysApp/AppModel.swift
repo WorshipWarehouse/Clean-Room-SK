@@ -450,6 +450,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// Moves a layer's envelope on the same live-edit path the other layer controls
+    /// take: the patch is republished and no voice is released, so an envelope turned
+    /// under a held chord shapes the next note without cutting the one sounding. Each
+    /// stage is optional so one control can move its field and leave the rest alone, and
+    /// `LayerEnvelope` clamps whichever arrive.
+    func setLayerEnvelope(
+        _ layerID: UInt8,
+        attack: Float? = nil,
+        decay: Float? = nil,
+        sustain: Float? = nil,
+        release: Float? = nil
+    ) {
+        editLayer(layerID) { layer in
+            let current = layer.envelope
+            layer.envelope = LayerEnvelope(
+                attack: attack ?? current.attack,
+                decay: decay ?? current.decay,
+                sustain: sustain ?? current.sustain,
+                release: release ?? current.release
+            )
+        }
+    }
+
     func setLayerTranspose(_ layerID: UInt8, semitones: Int8) {
         editLayer(layerID) { $0.transpose = min(max(semitones, -24), 24) }
     }

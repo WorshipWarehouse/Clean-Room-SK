@@ -142,6 +142,26 @@ or a window this environment does not have. The next pass should start from the 
       60%) and a count of blocks over half the budget (at most a twentieth, plus one), with a
       four-block ceiling on the single worst block so a real blow-up still fails. The tail is
       printed as `RENDER_BUDGET_TAIL` on a pass as well as a failure.
+- [x] **Per-layer envelope.** Each layer now carries an attack, a decay, a sustain and a
+      release, the four fields the original's `ADSRModel` names,
+      clamped on write, on read and on decode by `LayerEnvelope`, with bank version 7
+      defaulting an older patch to the instrument's own 8 ms / no decay / full sustain /
+      220 ms ramp. The instrument keeps four per-layer tables and gains one stage: a
+      voice with a decay and a sustain below its peak falls to that level and holds there,
+      and release divides the voice's own level by its layer's release frames at the
+      moment the key comes up. The command carries two stages per slot
+      (`setLayerAttackDecay`, `setLayerSustainRelease`) rather than growing the ring's
+      struct. `RealtimeKeysoundEngine.setLayerEnvelope` and `AppModel.setLayerEnvelope`
+      ride the no-release live-edit path. The layer editor's row is now built from
+      `LayerSlider`s - real AppKit sliders named `layer.<id>.<parameter>` with their own
+      ranges - so every control it draws can be found and driven.
+Eight core cases in
+      `LayerEnvelopeTests` measure the law, the decoded defaults, the round trip, a slow
+      attack's position, the decay's sustain level, a long and a short release, and the
+      live edit on a held note; three cases in `LayerRowViewTests` host the shipped row
+      and prove each slider is constructed, carries its range and writes its own field,
+      including through to the samples. Evidence: `docs/re/layer-envelope.md`.
+
 ## How an item is closed
 A box is ticked only when the change is on `main` and the workflows for that head are terminal green:
 build with its `Test` step, plus click, patch-transfer, session and concurrency. `concurrency` starts

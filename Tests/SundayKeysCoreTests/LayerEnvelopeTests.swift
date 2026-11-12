@@ -129,7 +129,7 @@ final class LayerEnvelopeTests: XCTestCase {
         XCTAssertEqual(LayerEnvelope(release: 0).release, 0.005)
         XCTAssertEqual(LayerEnvelope(release: 1e9).release, 10)
         XCTAssertTrue(LayerEnvelope.default.holdsLevel)
-        XCTAssertTrue(LayerEnvelope(sustain: 1, decay: 2).holdsLevel)
+        XCTAssertTrue(LayerEnvelope(decay: 2, sustain: 1).holdsLevel)
         XCTAssertFalse(LayerEnvelope(decay: 0.2, sustain: 0.5).holdsLevel)
 
         XCTAssertEqual(LayerEnvelope.frames(for: 0, sampleRate: sampleRate), 1)

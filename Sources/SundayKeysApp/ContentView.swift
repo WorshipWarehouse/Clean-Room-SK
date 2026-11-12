@@ -293,9 +293,22 @@ struct ControllerRow: View {
 
 /// One editable layer. Every control writes straight back into the patch bank and
 /// down to the engine, so what the window shows is what is sounding.
+///
+/// The numeric controls are `LayerSlider`s - real AppKit sliders carrying their
+/// parameter's own name and range - because a hosted SwiftUI slider cannot be found
+/// by name or driven offscreen, and a control that cannot be found cannot be proven.
+/// `LayerRowViewTests` hosts this row and walks every slider it draws.
 struct LayerRow: View {
     let layer: KeyLayer
     @ObservedObject var model: AppModel
+
+    /// The parameters this row draws a slider for, in the order it draws them. The body
+    /// below builds exactly these, and `LayerRowViewTests` walks the same list against the
+    /// hosted row, so a parameter that exists only in the model cannot pass as done.
+    static let sliderNames = [
+        "gain", "pan", "tone", "resonance",
+        "attack", "decay", "sustain", "release",
+    ]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -348,99 +361,130 @@ struct LayerRow: View {
                 .labelsHidden()
                 .frame(width: 210)
 
-                Slider(
-                    value: Binding(
-                        get: { Double(layer.gain) },
-                        set: { model.setLayerGain(layer.id, gain: Float($0)) }
-                    ),
-                    in: 0...1.5
-                )
+                LayerSlider(
+                    identifier: sliderName("gain"),
+                    value: Double(layer.gain),
+                    range: 0...1.5
+                ) { model.setLayerGain(layer.id, gain: Float($0)) }
                 .frame(width: 150)
 
-                Text(String(format: "gain %.2f", layer.gain))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 74, alignment: .leading)
+                readout(String(format: "gain %.2f", layer.gain), width: 74)
 
-                Slider(
-                    value: Binding(
-                        get: { Double(layer.pan) },
-                        set: {
-                            model.setLayerPan(
-                                layer.id,
-                                pan: Float($0)
-                            )
-                        }
-                    ),
-                    in: -1...1
-                )
+                LayerSlider(
+                    identifier: sliderName("pan"),
+                    value: Double(layer.pan),
+                    range: -1...1
+                ) { model.setLayerPan(layer.id, pan: Float($0)) }
                 .frame(width: 110)
 
-                Text(panText)
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 64, alignment: .leading)
-
-            Slider(
-                value: Binding(
-                    get: { Double(LayerFilter.octaves(fromCutoff: layer.filterCutoff)) },
-                    set: {
-                        model.setLayerFilter(
-                            layer.id,
-                            cutoff: LayerFilter.cutoff(fromOctaves: Float($0)),
-                            resonance: layer.filterResonance
-                        )
-                    }
-                ),
-                in: 0...Double(LayerFilter.octaveSpan)
-            )
-            .frame(width: 120)
-            
-            Text(filterText)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 82, alignment: .leading)
-            
-            Slider(
-                value: Binding(
-                    get: { Double(layer.filterResonance) },
-                    set: {
-                        model.setLayerFilter(
-                            layer.id,
-                            cutoff: layer.filterCutoff,
-                            resonance: Float($0)
-                        )
-                    }
-                ),
-                in: 0...1
-            )
-            .frame(width: 90)
-            
-            Text(String(format: "res %.2f", layer.filterResonance))
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 74, alignment: .leading)
-            
-            Spacer()
+                readout(panText, width: 64)
             }
-            .disabled(!layer.enabled)
+
+            HStack(spacing: 10) {
+                LayerSlider(
+                    identifier: sliderName("tone"),
+                    value: Double(LayerFilter.octaves(fromCutoff: layer.filterCutoff)),
+                    range: 0...Double(LayerFilter.octaveSpan)
+                ) { octaves in
+                    model.setLayerFilter(
+                        layer.id,
+                        cutoff: LayerFilter.cutoff(fromOctaves: Float(octaves)),
+                        resonance: layer.filterResonance
+                    )
+                }
+                .frame(width: 120)
+
+                readout(filterText, width: 82)
+
+                LayerSlider(
+                    identifier: sliderName("resonance"),
+                    value: Double(layer.filterResonance),
+                    range: 0...1
+                ) { value in
+                    model.setLayerFilter(
+                        layer.id,
+                        cutoff: layer.filterCutoff,
+                        resonance: Float(value)
+                    )
+                }
+                .frame(width: 90)
+
+                readout(String(format: "res %.2f", layer.filterResonance), width: 78)
+            }
+
+            HStack(spacing: 10) {
+                LayerSlider(
+                    identifier: sliderName("attack"),
+                    value: Double(layer.envelope.attack),
+                    range: Double(LayerEnvelope.attackRange.lowerBound)...Double(LayerEnvelope.attackRange.upperBound)
+                ) { model.setLayerEnvelope(layer.id, attack: Float($0)) }
+                .frame(width: 110)
+
+                readout(timeText("attack", layer.envelope.attack), width: 96)
+
+                LayerSlider(
+                    identifier: sliderName("decay"),
+                    value: Double(layer.envelope.decay),
+                    range: 0...Double(LayerEnvelope.decayRange.upperBound)
+                ) { model.setLayerEnvelope(layer.id, decay: Float($0)) }
+                .frame(width: 110)
+
+                readout(timeText("decay", layer.envelope.decay), width: 90)
+
+                LayerSlider(
+                    identifier: sliderName("sustain"),
+                    value: Double(layer.envelope.sustain),
+                    range: 0...1
+                ) { model.setLayerEnvelope(layer.id, sustain: Float($0)) }
+                .frame(width: 100)
+
+                readout(String(format: "sustain %.2f", layer.envelope.sustain), width: 90)
+
+                LayerSlider(
+                    identifier: sliderName("release"),
+                    value: Double(layer.envelope.release),
+                    range: Double(LayerEnvelope.releaseRange.lowerBound)...Double(LayerEnvelope.releaseRange.upperBound)
+                ) { model.setLayerEnvelope(layer.id, release: Float($0)) }
+                .frame(width: 110)
+
+                readout(timeText("release", layer.envelope.release), width: 96)
+            }
         }
-        .padding(.vertical, 2)
     }
 
-    /// The position in the window's own words: L and R rather than a
-    /// signed number, which is how a player thinks about where a layer sits.
-            /// The corner in the window's own words: a player reads tone as open or
-            /// as a frequency, not as a slider position.
-            private var filterText: String {
-                if layer.filterIsOpen { return "tone open" }
-                if layer.filterCutoff >= 1000 {
-                    return String(format: "tone %.1fk", layer.filterCutoff / 1000)
-                }
-                return String(format: "tone %.0f Hz", layer.filterCutoff)
-            }
-            
-            private var panText: String {
+    /// The name this row gives a control, which is the name the test reads back.
+    private func sliderName(_ parameter: String) -> String {
+        "layer.\(layer.id).\(parameter)"
+    }
+
+    private func readout(_ text: String, width: CGFloat) -> some View {
+        Text(text)
+            .font(.system(.caption, design: .monospaced))
+            .foregroundStyle(.secondary)
+            .frame(width: width, alignment: .leading)
+    }
+
+    /// A time in the window's own words: milliseconds under a second, seconds above it.
+    private func timeText(_ label: String, _ seconds: Float) -> String {
+        if seconds < 1 {
+            return String(format: "%@ %.0f ms", label, seconds * 1000)
+        }
+        return String(format: "%@ %.1f s", label, seconds)
+    }
+
+    /// The corner in the window's own words: a player reads tone as open or as a
+    /// frequency, not as a slider position.
+    private var filterText: String {
+        if layer.filterIsOpen { return "tone open" }
+        if layer.filterCutoff >= 1000 {
+            return String(format: "tone %.1fk", layer.filterCutoff / 1000)
+        }
+        return String(format: "tone %.0f Hz", layer.filterCutoff)
+    }
+
+    /// The position in the window's own words: L and R rather than a signed number,
+    /// which is how a player thinks about where a layer sits.
+    private var panText: String {
         if abs(layer.pan) < 0.005 { return "pan C" }
         if layer.pan < 0 {
             return String(format: "pan L%.2f", -layer.pan)
@@ -469,6 +513,7 @@ struct LayerRow: View {
         )
     }
 }
+
 
 /// Two octaves of playable keys, so the instrument can be played without a MIDI
 /// controller attached. Mouse down starts the note, mouse up releases it.

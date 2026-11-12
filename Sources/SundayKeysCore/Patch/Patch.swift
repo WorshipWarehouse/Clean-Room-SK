@@ -61,7 +61,9 @@ public struct PatchBank: Codable, Equatable, Sendable {
     /// with the chain bypassed, the standard controller layout, no set
     /// list, which the app plays in bank order, and every layer at centre. Version 6 added the per-layer tone, which defaults
 /// wide open.
-    public static let currentVersion = 6
+    public static let currentVersion = 7
+    // Version 7 adds each layer's envelope; a version 6 bank loads with the
+    // instrument's original ramp as the default.
 
     public var version: Int
     public var patches: [Patch]

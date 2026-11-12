@@ -200,7 +200,7 @@ final class LayerFilterTests: XCTestCase {
         let patch = Patch(name: "Dark", layers: layers(cutoff: 800, resonance: 0.4))
         let encoded = try JSONEncoder().encode(PatchBank(patches: [patch]))
         let loaded = try JSONDecoder().decode(PatchBank.self, from: encoded)
-        XCTAssertEqual(loaded.version, 6)
+        XCTAssertEqual(loaded.version, 7)
         XCTAssertEqual(loaded.patches[0].layers[0].filterCutoff, 800, accuracy: 0.5)
         XCTAssertEqual(loaded.patches[0].layers[0].filterResonance, 0.4, accuracy: 1e-5)
 
