@@ -18,18 +18,30 @@ jobs:
         run: python3 tools/tone_docs.py
       - name: Build with tests
         run: |
-          set -o pipefail
           swift build --build-tests > /tmp/build.log 2>&1
           status=$?
-          { grep -E "error:" /tmp/build.log | head -n 120 | sed -E 's/^/::error::/' || true; }
+          if [ "$status" -ne 0 ]; then tail -n 80 /tmp/build.log; fi
           exit $status
       - name: Test
         run: |
-          set -o pipefail
           swift test > /tmp/test.log 2>&1
           status=$?
-          { grep -E "error:|XCTAssert|failed" /tmp/test.log | head -n 120 | sed -E 's/^/::error::/' || true; }
+          if [ "$status" -ne 0 ]; then tail -n 120 /tmp/test.log; fi
           exit $status
+      - name: Publish a failing log
+        if: failure()
+        run: |
+          git config user.email ci@example.com
+          git config user.name "tone patch job"
+          cp /tmp/build.log build.log 2>/dev/null || true
+          cp /tmp/test.log test.log 2>/dev/null || true
+          git checkout --orphan ci-diag
+          git rm -r --cached . -q || true
+          git add -f build.log test.log 2>/dev/null || true
+          git commit -m "diagnostic logs" || true
+          git push -f origin ci-diag
+          tail -n 30 build.log 2>/dev/null | sed -E 's/^/::error::/' || true
+          tail -n 30 test.log 2>/dev/null | sed -E 's/^/::error::/' || true
       - name: Commit
         run: |
           git config user.email ci@example.com
